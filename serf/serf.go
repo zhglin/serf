@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/hashicorp/serf/memberlist"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -19,7 +20,6 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-msgpack/codec"
-	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/serf/coordinate"
 )
 

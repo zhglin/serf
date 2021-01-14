@@ -1,7 +1,7 @@
 package serf
 
 import (
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 )
 
 type conflictDelegate struct {

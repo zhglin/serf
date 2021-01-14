@@ -16,7 +16,7 @@ import (
 
 const (
 	// This is the default IO timeout for the client
-	DefaultTimeout = 10 * time.Second
+	DefaultTimeout = 10 * time.Second	// rpc的超时时间
 )
 
 var (
@@ -40,6 +40,7 @@ type seqHandler interface {
 
 // Config is provided to ClientFromConfig to make
 // a new RPCClient from the given configuration
+// RpcClient的需要的配置数据
 type Config struct {
 	// Addr must be the RPC address to contact
 	Addr string
@@ -56,9 +57,9 @@ type Config struct {
 // Additionally, the client manages event streams and monitors, enabling a client
 // to easily receive event notifications instead of using the fork/exec mechanism.
 type RPCClient struct {
-	seq uint64
+	seq uint64		// 请求序列号
 
-	timeout   time.Duration
+	timeout   time.Duration	// 超时时间
 	conn      *net.TCPConn
 	reader    *bufio.Reader
 	writer    *bufio.Writer
@@ -119,6 +120,7 @@ func NewRPCClient(addr string) (*RPCClient, error) {
 // ClientFromConfig is used to create a new RPC client given the
 // configuration object. This will return a client, or an error if
 // the connection could not be established.
+// 根据config创建rpcClient
 func ClientFromConfig(c *Config) (*RPCClient, error) {
 	// Setup the defaults
 	if c.Timeout == 0 {
@@ -126,6 +128,7 @@ func ClientFromConfig(c *Config) (*RPCClient, error) {
 	}
 
 	// Try to dial to serf
+	// tcp连接addr
 	conn, err := net.DialTimeout("tcp", c.Addr, c.Timeout)
 	if err != nil {
 		return nil, err
@@ -141,10 +144,16 @@ func ClientFromConfig(c *Config) (*RPCClient, error) {
 		dispatch:   make(map[uint64]seqHandler),
 		shutdownCh: make(chan struct{}),
 	}
+
+	// 由Decoder接管conn的读取
 	client.dec = codec.NewDecoder(client.reader,
 		&codec.MsgpackHandle{RawToString: true, WriteExt: true})
+
+	// Encoder接管conn的写入
 	client.enc = codec.NewEncoder(client.writer,
 		&codec.MsgpackHandle{RawToString: true, WriteExt: true})
+
+	// 处理conn响应
 	go client.listen()
 
 	// Do the initial handshake
@@ -778,6 +787,7 @@ func strToError(s string) error {
 }
 
 // getSeq returns the next sequence number in a safe manner
+// 获取请求序列号
 func (c *RPCClient) getSeq() uint64 {
 	return atomic.AddUint64(&c.seq, 1)
 }

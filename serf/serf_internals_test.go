@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 	"github.com/hashicorp/serf/testutil"
 	"github.com/hashicorp/serf/testutil/retry"
 )

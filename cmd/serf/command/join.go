@@ -38,13 +38,13 @@ func (c *JoinCommand) Run(args []string) int {
 	cmdFlags := flag.NewFlagSet("join", flag.ContinueOnError)
 	cmdFlags.Usage = func() { c.Ui.Output(c.Help()) }
 	cmdFlags.BoolVar(&replayEvents, "replay", false, "replay")
-	rpcAddr := RPCAddrFlag(cmdFlags)
-	rpcAuth := RPCAuthFlag(cmdFlags)
+	rpcAddr := RPCAddrFlag(cmdFlags)	// 操作的目的serf
+	rpcAuth := RPCAuthFlag(cmdFlags)	// 与目的serf的通信是否有token
 	if err := cmdFlags.Parse(args); err != nil {
 		return 1
 	}
 
-	addrs := cmdFlags.Args()
+	addrs := cmdFlags.Args()	// 目的serf需要添加的addr
 	if len(addrs) == 0 {
 		c.Ui.Error("At least one address to join must be specified.")
 		c.Ui.Error("")

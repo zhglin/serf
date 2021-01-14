@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 )
 
 // QueryParam is provided to Query() to configure the parameters of the

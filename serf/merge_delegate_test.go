@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 )
 
 func TestValidateMemberInfo(t *testing.T) {

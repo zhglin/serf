@@ -6,7 +6,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 	"github.com/hashicorp/serf/testutil"
 )
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 )
 
 // ProtocolVersionMap is the mapping of Serf delegate protocol versions

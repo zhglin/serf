@@ -16,7 +16,7 @@ import (
 	"github.com/armon/go-metrics"
 	gsyslog "github.com/hashicorp/go-syslog"
 	"github.com/hashicorp/logutils"
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 	"github.com/hashicorp/serf/serf"
 	"github.com/mitchellh/cli"
 )
@@ -49,6 +49,7 @@ var _ cli.Command = &Command{}
 
 // readConfig is responsible for setup of our configuration using
 // the command line and any file configs
+// 从命令号读取配置到config中
 func (c *Command) readConfig() *Config {
 	var cmdConfig Config
 	var configFiles []string
@@ -137,6 +138,7 @@ func (c *Command) readConfig() *Config {
 		cmdConfig.BroadcastTimeout = dur
 	}
 
+	// 解析配置文件配置
 	config := DefaultConfig()
 	if len(configFiles) > 0 {
 		fileConfig, err := ReadConfigPaths(configFiles)
@@ -148,6 +150,7 @@ func (c *Command) readConfig() *Config {
 		config = MergeConfig(config, fileConfig)
 	}
 
+	// 配置合并 命令行参数替换配置文件
 	config = MergeConfig(config, &cmdConfig)
 
 	if config.NodeName == "" {
@@ -201,6 +204,7 @@ func (c *Command) readConfig() *Config {
 }
 
 // setupAgent is used to create the agent we use
+// 根据config生成agent 并设置serfConfig
 func (c *Command) setupAgent(config *Config, logOutput io.Writer) *Agent {
 	bindIP, bindPort, err := config.AddrParts(config.BindAddr)
 	if err != nil {
@@ -583,6 +587,7 @@ func (c *Command) Run(args []string) int {
 	}
 
 	// Setup serf
+	// 创建agent并设置serfConfig
 	agent := c.setupAgent(config, logOutput)
 	if agent == nil {
 		return 1

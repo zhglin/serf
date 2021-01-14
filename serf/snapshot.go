@@ -77,7 +77,7 @@ type Snapshotter struct {
 	rejoinAfterLeave        bool
 	shutdownCh              <-chan struct{}
 	waitCh                  chan struct{}
-	lastAttemptedCompaction time.Time
+	lastAttemptedCompaction time.Time // 上一次写入异常进行压缩的时间
 }
 
 // PreviousNode is used to represent the previously known alive nodes

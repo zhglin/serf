@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 	"github.com/hashicorp/serf/serf"
 )
 
@@ -46,6 +46,7 @@ type Agent struct {
 }
 
 // Create creates a new agent, potentially returning an error
+// 创建agent
 func Create(agentConf *Config, conf *serf.Config, logOutput io.Writer) (*Agent, error) {
 	// Ensure we have a log sink
 	if logOutput == nil {
@@ -227,6 +228,7 @@ func (a *Agent) RegisterEventHandler(eh EventHandler) {
 	a.eventHandlersLock.Lock()
 	defer a.eventHandlersLock.Unlock()
 
+	// map去重 list全量从map添加
 	a.eventHandlers[eh] = struct{}{}
 	a.eventHandlerList = nil
 	for eh := range a.eventHandlers {

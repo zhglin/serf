@@ -212,6 +212,7 @@ type Config struct {
 
 	// EnableCompression specifies whether message compression is enabled
 	// by `github.com/hashicorp/memberlist` when broadcasting events.
+	// 广播报文是否进行压缩
 	EnableCompression bool `mapstructure:"enable_compression"`
 
 	// StatsiteAddr is the address of a statsite instance. If provided,
@@ -365,6 +366,7 @@ func containsKey(keys []string, key string) bool {
 
 // MergeConfig merges two configurations together to make a single new
 // configuration.
+// 合并配置
 func MergeConfig(a, b *Config) *Config {
 	var result Config = *a
 
@@ -502,6 +504,7 @@ func MergeConfig(a, b *Config) *Config {
 // The paths can be to files or directories. If the path is a directory,
 // we read one directory deep and read any files ending in ".json" as
 // configuration files.
+// 读取配置文件
 func ReadConfigPaths(paths []string) (*Config, error) {
 	result := new(Config)
 	for _, path := range paths {
@@ -516,8 +519,9 @@ func ReadConfigPaths(paths []string) (*Config, error) {
 			return nil, fmt.Errorf("Error reading '%s': %s", path, err)
 		}
 
+		// 普通文件
 		if !fi.IsDir() {
-			config, err := DecodeConfig(f)
+			config, err := DecodeConfig(f) // 解析配置文件
 			f.Close()
 
 			if err != nil {
@@ -528,6 +532,7 @@ func ReadConfigPaths(paths []string) (*Config, error) {
 			continue
 		}
 
+		// 目录
 		contents, err := f.Readdir(-1)
 		f.Close()
 		if err != nil {
@@ -561,7 +566,7 @@ func ReadConfigPaths(paths []string) (*Config, error) {
 				return nil, fmt.Errorf("Error decoding '%s': %s", subpath, err)
 			}
 
-			result = MergeConfig(result, config)
+			result = MergeConfig(result, config) // 合并配置
 		}
 	}
 

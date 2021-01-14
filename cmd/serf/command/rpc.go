@@ -28,6 +28,7 @@ func RPCAuthFlag(f *flag.FlagSet) *string {
 }
 
 // RPCClient returns a new Serf RPC client with the given address.
+// 创建rpcClient
 func RPCClient(addr, auth string) (*client.RPCClient, error) {
 	config := client.Config{Addr: addr, AuthKey: auth}
 	return client.ClientFromConfig(&config)

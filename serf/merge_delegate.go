@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/memberlist"
 )
 
 type MergeDelegate interface {
