@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/serf/memberlist"
+	"github.com/hashicorp/serf/extpkg/memberlist"
 )
 
 // EventType are all the types of events that may occur and be sent

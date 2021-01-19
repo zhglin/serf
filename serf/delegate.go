@@ -6,7 +6,7 @@ import (
 
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-msgpack/codec"
-	"github.com/hashicorp/serf/memberlist"
+	"github.com/hashicorp/serf/extpkg/memberlist"
 )
 
 // delegate is the memberlist.Delegate implementation that Serf uses.
@@ -16,6 +16,7 @@ type delegate struct {
 
 var _ memberlist.Delegate = &delegate{}
 
+// 编码tag并校验长度
 func (d *delegate) NodeMeta(limit int) []byte {
 	roleBytes := d.serf.encodeTags(d.serf.config.Tags)
 	if len(roleBytes) > limit {
@@ -36,6 +37,7 @@ func (d *delegate) NotifyMsg(buf []byte) {
 	rebroadcastQueue := d.serf.broadcasts
 	t := messageType(buf[0])
 
+	// 是否丢弃
 	if d.serf.config.messageDropper(t) {
 		return
 	}

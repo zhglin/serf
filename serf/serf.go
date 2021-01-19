@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/hashicorp/serf/memberlist"
+	"github.com/hashicorp/serf/extpkg/memberlist"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -1772,8 +1772,10 @@ func (s *Serf) handleRejoin(previous []*PreviousNode) {
 }
 
 // encodeTags is used to encode a tag map
+// 对tag进行编码
 func (s *Serf) encodeTags(tags map[string]string) []byte {
 	// Support role-only backwards compatibility
+	// 只支持role
 	if s.ProtocolVersion() < 3 {
 		role := tags["role"]
 		return []byte(role)

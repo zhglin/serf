@@ -1,7 +1,7 @@
 package serf
 
 import (
-	"github.com/hashicorp/serf/memberlist"
+	"github.com/hashicorp/serf/extpkg/memberlist"
 )
 
 // broadcast is an implementation of memberlist.Broadcast and is used

@@ -16,7 +16,7 @@ import (
 	"github.com/armon/go-metrics"
 	gsyslog "github.com/hashicorp/go-syslog"
 	"github.com/hashicorp/logutils"
-	"github.com/hashicorp/serf/memberlist"
+	"github.com/hashicorp/serf/extpkg/memberlist"
 	"github.com/hashicorp/serf/serf"
 	"github.com/mitchellh/cli"
 )

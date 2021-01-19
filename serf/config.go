@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/hashicorp/serf/memberlist"
+	"github.com/hashicorp/serf/extpkg/memberlist"
 )
 
 // ProtocolVersionMap is the mapping of Serf delegate protocol versions
@@ -47,6 +47,7 @@ type Config struct {
 
 	// ProtocolVersion is the protocol version to speak. This must be between
 	// ProtocolVersionMin and ProtocolVersionMax.
+	// 协议版本号
 	ProtocolVersion uint8
 
 	// BroadcastTimeout is the amount of time to wait for a broadcast
@@ -252,6 +253,7 @@ type Config struct {
 	// control over sequencing of gossip arrival
 	//
 	// WARNING: this should ONLY be used in tests
+	// 回复消息的回调 判断是否丢弃
 	messageDropper func(typ messageType) bool
 
 	// ReconnectTimeoutOverride is an optional interface which when present allows
