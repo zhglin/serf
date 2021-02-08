@@ -37,16 +37,17 @@ var errNodeNamesAreRequired = errors.New("memberlist: node names are required by
 type Memberlist struct {
 	sequenceNum uint32 // Local sequence number
 	incarnation uint32 // Local incarnation number	// 当前live节点的标识号 增加一个+1
-	numNodes    uint32 // Number of known nodes (estimate)
+	numNodes    uint32 // Number of known nodes (estimate)	// 当前有多少个活跃节点
 	pushPullReq uint32 // Number of push/pull requests
 
 	advertiseLock sync.RWMutex //advertise变更互斥锁
 	advertiseAddr net.IP       //advertise地址
 	advertisePort uint16       //advertise端口号
 
-	config         *Config // memberList配置
-	shutdown       int32   // Used as an atomic boolean value
-	shutdownCh     chan struct{}
+	config     *Config // memberList配置
+	shutdown   int32   // Used as an atomic boolean value
+	shutdownCh chan struct{}
+	// 当前节点是否已离开集群
 	leave          int32 // Used as an atomic boolean value
 	leaveBroadcast chan struct{}
 
@@ -61,9 +62,10 @@ type Memberlist struct {
 	lowPriorityMsgQueue  *list.List    // 高优先级 suspectMsg,deadMsg,userMsg 消息类型队列
 	msgQueueLock         sync.Mutex    //list操作的加锁保护
 
-	nodeLock   sync.RWMutex
-	nodes      []*nodeState          // Known nodes
-	nodeMap    map[string]*nodeState // Maps Node.Name -> NodeState
+	// cluster中节点
+	nodeLock   sync.RWMutex          // node操作的读写锁
+	nodes      []*nodeState          // Known nodes							// 所有活跃节点
+	nodeMap    map[string]*nodeState // Maps Node.Name -> NodeState			// 所有活跃节点map
 	nodeTimers map[string]*suspicion // Maps Node.Name -> suspicion timer
 	awareness  *awareness
 
@@ -81,7 +83,7 @@ type Memberlist struct {
 }
 
 // BuildVsnArray creates the array of Vsn
-// 支持的协议版本号
+// 支持的协议版本号 memberlist 最小版本 最大版本 使用版本 serf 最小版本 最大版本 使用版本
 func (conf *Config) BuildVsnArray() []uint8 {
 	return []uint8{
 		ProtocolVersionMin, ProtocolVersionMax, conf.ProtocolVersion,
@@ -492,6 +494,7 @@ func (m *Memberlist) refreshAdvertise() (net.IP, int, error) {
 }
 
 // LocalNode is used to return the local Node
+// 在memberList层面获取当前的node信息
 func (m *Memberlist) LocalNode() *Node {
 	m.nodeLock.RLock()
 	defer m.nodeLock.RUnlock()
@@ -617,6 +620,7 @@ func (m *Memberlist) Members() []*Node {
 // the time of calling this and calling Members, the number of alive nodes
 // may have changed, so this shouldn't be used to determine how many
 // members will be returned by Members.
+// 获取当前节点在当前时刻已知的存活节点数量
 func (m *Memberlist) NumMembers() (alive int) {
 	m.nodeLock.RLock()
 	defer m.nodeLock.RUnlock()

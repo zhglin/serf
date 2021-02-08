@@ -70,6 +70,7 @@ func suspicionTimeout(suspicionMult, n int, interval time.Duration) time.Duratio
 }
 
 // retransmitLimit computes the limit of retransmissions
+// 获取board的重试次数 随着集群规模动态调整重试次数 每增加一个量级就增加一倍retransmitMult
 func retransmitLimit(retransmitMult, n int) int {
 	nodeScale := math.Ceil(math.Log10(float64(n + 1)))
 	limit := retransmitMult * int(nodeScale)
@@ -166,6 +167,7 @@ func makeCompoundMessage(msgs [][]byte) *bytes.Buffer {
 	buf.WriteByte(uint8(len(msgs)))
 
 	// Add the message lengths
+	// 添加两个字节的报文长度
 	for _, m := range msgs {
 		binary.Write(buf, binary.BigEndian, uint16(len(m)))
 	}

@@ -15,19 +15,23 @@ import (
 
 // QueryParam is provided to Query() to configure the parameters of the
 // query. If not provided, sane defaults will be used.
+// query消息的参数
 type QueryParam struct {
 	// If provided, we restrict the nodes that should respond to those
 	// with names in this list
+	// 需要query的node名称
 	FilterNodes []string
 
 	// FilterTags maps a tag name to a regular expression that is applied
 	// to restrict the nodes that should respond
+	// 需要query的node tags
 	FilterTags map[string]string
 
 	// If true, we are requesting an delivery acknowledgement from
 	// every node that meets the filter requirement. This means nodes
 	// the receive the message but do not pass the filters, will not
 	// send an ack.
+	// 是否需要对方进行ack
 	RequestAck bool
 
 	// RelayFactor controls the number of duplicate responses to relay
@@ -36,6 +40,7 @@ type QueryParam struct {
 
 	// The timeout limits how long the query is left open. If not provided,
 	// then a default timeout is used based on the configuration of Serf
+	// 超时时间
 	Timeout time.Duration
 }
 
@@ -89,9 +94,11 @@ func (q *QueryParam) encodeFilters() ([][]byte, error) {
 // Ack's as well as responses and to provide those back to a client.
 type QueryResponse struct {
 	// ackCh is used to send the name of a node for which we've received an ack
+	// 写入进行ack的node的name
 	ackCh chan string
 
 	// deadline is the query end time (start + query timeout)
+	// query的超时时间 超过此时间意味着query关闭
 	deadline time.Time
 
 	// Query ID
@@ -101,25 +108,29 @@ type QueryResponse struct {
 	lTime LamportTime
 
 	// respCh is used to send a response from a node
+	// node的相应消息
 	respCh chan NodeResponse
 
 	// acks/responses are used to track the nodes that have sent an ack/response
-	acks      map[string]struct{}
-	responses map[string]struct{}
+	acks      map[string]struct{} // 已经进行应答的nodes 只是去重用  key=>node.name
+	responses map[string]struct{} // 回复消息的nodes 只是去重用  key=>node.name
 
-	closed    bool
+	closed    bool // 是否已关闭  超时关闭
 	closeLock sync.Mutex
 }
 
 // newQueryResponse is used to construct a new query response
+// 创建queryResponse
 func newQueryResponse(n int, q *messageQuery) *QueryResponse {
 	resp := &QueryResponse{
-		deadline:  time.Now().Add(q.Timeout),
+		deadline:  time.Now().Add(q.Timeout), // 超时时间
 		id:        q.ID,
 		lTime:     q.LTime,
 		respCh:    make(chan NodeResponse, n),
 		responses: make(map[string]struct{}),
 	}
+
+	// 需要进行ack 才进行初始化
 	if q.Ack() {
 		resp.ackCh = make(chan string, n)
 		resp.acks = make(map[string]struct{})
@@ -129,6 +140,7 @@ func newQueryResponse(n int, q *messageQuery) *QueryResponse {
 
 // Close is used to close the query, which will close the underlying
 // channels and prevent further deliveries
+// 关闭此query
 func (r *QueryResponse) Close() {
 	r.closeLock.Lock()
 	defer r.closeLock.Unlock()
@@ -150,9 +162,11 @@ func (r *QueryResponse) Deadline() time.Time {
 }
 
 // Finished returns if the query is finished running
+// 请求是否已经完成
 func (r *QueryResponse) Finished() bool {
 	r.closeLock.Lock()
 	defer r.closeLock.Unlock()
+	// 被关闭 或者 超时
 	return r.closed || time.Now().After(r.deadline)
 }
 
@@ -170,6 +184,7 @@ func (r *QueryResponse) ResponseCh() <-chan NodeResponse {
 }
 
 // sendResponse sends a response on the response channel ensuring the channel is not closed.
+// 写入响应信息到query
 func (r *QueryResponse) sendResponse(nr NodeResponse) error {
 	r.closeLock.Lock()
 	defer r.closeLock.Unlock()
@@ -177,7 +192,7 @@ func (r *QueryResponse) sendResponse(nr NodeResponse) error {
 		return nil
 	}
 	select {
-	case r.respCh <- nr:
+	case r.respCh <- nr: // 写入chain
 		r.responses[nr.From] = struct{}{}
 	default:
 		return errors.New("serf: Failed to deliver query response, dropping")
@@ -186,6 +201,7 @@ func (r *QueryResponse) sendResponse(nr NodeResponse) error {
 }
 
 // NodeResponse is used to represent a single response from a node
+// node的相应消息
 type NodeResponse struct {
 	From    string
 	Payload []byte

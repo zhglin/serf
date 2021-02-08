@@ -15,17 +15,20 @@ type LamportClock struct {
 type LamportTime uint64
 
 // Time is used to return the current value of the lamport clock
+// 获取本地的lamport时钟
 func (l *LamportClock) Time() LamportTime {
 	return LamportTime(atomic.LoadUint64(&l.counter))
 }
 
 // Increment is used to increment and return the value of the lamport clock
+// 本地lamport时钟+1
 func (l *LamportClock) Increment() LamportTime {
 	return LamportTime(atomic.AddUint64(&l.counter, 1))
 }
 
 // Witness is called to update our local clock if necessary after
 // witnessing a clock value received from another process
+// 根据接收的消息，更新本地的lamport时钟
 func (l *LamportClock) Witness(v LamportTime) {
 WITNESS:
 	// If the other value is old, we do not need to do anything

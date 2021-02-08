@@ -7,6 +7,7 @@ import (
 // broadcast is an implementation of memberlist.Broadcast and is used
 // to manage broadcasts across the memberlist channel that are related
 // only to Serf.
+// 实现memberList层的broadcast接口
 type broadcast struct {
 	msg    []byte
 	notify chan<- struct{}

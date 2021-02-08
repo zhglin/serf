@@ -61,8 +61,8 @@ func (n *Node) String() string {
 type nodeState struct {
 	Node
 	Incarnation uint32        // Last known incarnation number
-	State       NodeStateType // Current state
-	StateChange time.Time     // Time last state change happened
+	State       NodeStateType // Current state						当前状态
+	StateChange time.Time     // Time last state change happened	状态变更时间
 }
 
 // Address returns the host:port form of a node's address, suitable for use
@@ -924,10 +924,12 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 	// in-queue to be processed but blocked by the locks above. If we let
 	// that aliveMsg process, it'll cause us to re-join the cluster. This
 	// ensures that we don't.
+	// 如果是当前节点 并且已leave 忽略
 	if m.hasLeft() && a.Node == m.config.Name {
 		return
 	}
 
+	// 校验memberlist的协议版本号
 	if len(a.Vsn) >= 3 {
 		pMin := a.Vsn[0]
 		pMax := a.Vsn[1]
@@ -942,6 +944,8 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 	// alive messages based on custom logic. For example, using a cluster name.
 	// Using a merge delegate is not enough, as it is possible for passive
 	// cluster merging to still occur.
+	// todo 调用活动委托(如果有的话)。这可用于根据自定义逻辑过滤掉活动消息。例如，使用集群名称。使用合并委托是不够的，因为仍然可能发生被动集群合并。
+	// 活跃节点的回调接口 可以提供过滤的逻辑
 	if m.config.Alive != nil {
 		if len(a.Vsn) < 6 {
 			m.logger.Printf("[WARN] memberlist: ignoring alive message for '%s' (%v:%d) because Vsn is not present",
@@ -970,7 +974,9 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 	// Check if we've never seen this node before, and if not, then
 	// store this node in our node map.
 	var updatesNode bool
+	// 活跃节点不存在
 	if !ok {
+		// 是否允许加入集群
 		errCon := m.config.IPAllowed(a.Addr)
 		if errCon != nil {
 			m.logger.Printf("[WARN] memberlist: Rejected node %s (%v): %s", a.Node, net.IP(a.Addr), errCon)
@@ -995,12 +1001,15 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 		}
 
 		// Add to map
+		// 添加到map
 		m.nodeMap[a.Node] = state
 
 		// Get a random offset. This is important to ensure
 		// the failure detection bound is low on average. If all
 		// nodes did an append, failure detection bound would be
 		// very high.
+		// 获取一个随机偏移量。这对于确保故障检测范围平均较低是很重要的。如果所有节点都执行了附加操作，那么故障检测范围将非常大。
+		// 随机插入 todo
 		n := len(m.nodes)
 		offset := randomOffset(n)
 
@@ -1009,20 +1018,25 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 		m.nodes[offset], m.nodes[n] = m.nodes[n], m.nodes[offset]
 
 		// Update numNodes after we've added a new node
+		// 增加计数
 		atomic.AddUint32(&m.numNodes, 1)
 	} else {
 		// Check if this address is different than the existing node unless the old node is dead.
+		// 活跃节点已存在 是否ip || port变更
 		if !bytes.Equal([]byte(state.Addr), a.Addr) || state.Port != a.Port {
+			// 校验addr是否允许加入
 			errCon := m.config.IPAllowed(a.Addr)
 			if errCon != nil {
 				m.logger.Printf("[WARN] memberlist: Rejected IP update from %v to %v for node %s: %s", a.Node, state.Addr, net.IP(a.Addr), errCon)
 				return
 			}
 			// If DeadNodeReclaimTime is configured, check if enough time has elapsed since the node died.
+			// dead状态所能持续的最大时间
 			canReclaim := (m.config.DeadNodeReclaimTime > 0 &&
 				time.Since(state.StateChange) > m.config.DeadNodeReclaimTime)
 
 			// Allow the address to be updated if a dead node is being replaced.
+			// 当前状态不是left || dead 不允许进行变更
 			if state.State == StateLeft || (state.State == StateDead && canReclaim) {
 				m.logger.Printf("[INFO] memberlist: Updating address for left or failed node %s from %v:%d to %v:%d",
 					state.Name, state.Addr, state.Port, net.IP(a.Addr), a.Port)
@@ -1032,6 +1046,7 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 					state.Name, state.Addr, state.Port, net.IP(a.Addr), a.Port, state.State)
 
 				// Inform the conflict delegate if provided
+				// ip，port不同 name相同 && state不合法导致的冲突事件
 				if m.config.Conflict != nil {
 					other := Node{
 						Name: a.Node,
@@ -1048,6 +1063,7 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 
 	// Bail if the incarnation number is older, and this is not about us
 	isLocalNode := state.Name == m.config.Name
+	//已存在 未改变 不是当前node incarnation小 说明过期消息
 	if a.Incarnation <= state.Incarnation && !isLocalNode && !updatesNode {
 		return
 	}

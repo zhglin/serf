@@ -10,7 +10,7 @@ import (
 const (
 	// This is the prefix we use for queries that are internal to Serf.
 	// They are handled internally, and not forwarded to a client.
-	InternalQueryPrefix = "_serf_"
+	InternalQueryPrefix = "_serf_" // query具体类型的前缀
 
 	// pingQuery is run to check for reachability
 	pingQuery = "ping"
@@ -39,6 +39,7 @@ const (
 )
 
 // internalQueryName is used to generate a query name for an internal query
+// 构建query的类型
 func internalQueryName(name string) string {
 	return InternalQueryPrefix + name
 }
@@ -46,7 +47,7 @@ func internalQueryName(name string) string {
 // serfQueries is used to listen for queries that start with
 // _serf and respond to them as appropriate.
 type serfQueries struct {
-	inCh       chan Event
+	inCh       chan Event // 写入query的事件
 	logger     *log.Logger
 	outCh      chan<- Event
 	serf       *Serf
@@ -72,6 +73,7 @@ type nodeKeyResponse struct {
 // newSerfQueries is used to create a new serfQueries. We return an event
 // channel that is ingested and forwarded to an outCh. Any Queries that
 // have the InternalQueryPrefix are handled instead of forwarded.
+// 处理serf具体的query业务
 func newSerfQueries(serf *Serf, logger *log.Logger, outCh chan<- Event, shutdownCh <-chan struct{}) (chan<- Event, error) {
 	inCh := make(chan Event, 1024)
 	q := &serfQueries{
@@ -81,7 +83,7 @@ func newSerfQueries(serf *Serf, logger *log.Logger, outCh chan<- Event, shutdown
 		serf:       serf,
 		shutdownCh: shutdownCh,
 	}
-	go q.stream()
+	go q.stream() // 消费inCh消息
 	return inCh, nil
 }
 
@@ -131,9 +133,11 @@ func (s *serfQueries) handleQuery(q *Query) {
 // should the address we believe that node is at, if any.
 func (s *serfQueries) handleConflict(q *Query) {
 	// The target node name is the payload
+	// 查询的名称
 	node := string(q.Payload)
 
 	// Do not respond to the query if it is about us
+	// 名称相同的node不进行回复
 	if node == s.serf.config.NodeName {
 		return
 	}

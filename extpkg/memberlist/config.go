@@ -41,7 +41,7 @@ type Config struct {
 	// ProtocolVersion is the configured protocol version that we
 	// will _speak_. This must be between ProtocolVersionMin and
 	// ProtocolVersionMax.
-	// memberList的协议版本号
+	// memberList层的的协议版本号
 	ProtocolVersion uint8
 
 	// TCPTimeout is the timeout for establishing a stream connection with
@@ -68,6 +68,7 @@ type Config struct {
 	// This allows the retransmits to scale properly with cluster size. The
 	// higher the multiplier, the more likely a failed broadcast is to converge
 	// at the expense of increased bandwidth.
+	// udp消息的初始重试次数
 	RetransmitMult int
 
 	// SuspicionMult is the multiplier for determining the time an
@@ -193,16 +194,19 @@ type Config struct {
 	// for any custom messages that the delegate might do (broadcasts,
 	// local/remote state, etc.). If you don't set these, then the protocol
 	// versions will just be zero, and version compliance won't be done.
-	// memberlist的委托接口 处理gossip协议
-	Delegate                Delegate
+	// memberlist的委托接口 处理gossip协议 serf层实现
+	Delegate Delegate
+	// serf层的协议版本号
 	DelegateProtocolVersion uint8
-	DelegateProtocolMin     uint8
-	DelegateProtocolMax     uint8
-	Events                  EventDelegate
-	Conflict                ConflictDelegate
-	Merge                   MergeDelegate
-	Ping                    PingDelegate
-	Alive                   AliveDelegate
+	// serf层支持的最小的协议版本号
+	DelegateProtocolMin uint8
+	// serf层支持的最大的协议版本号
+	DelegateProtocolMax uint8
+	Events              EventDelegate
+	Conflict            ConflictDelegate // node名称冲突的事件回调
+	Merge               MergeDelegate
+	Ping                PingDelegate
+	Alive               AliveDelegate // serf层设置的活跃节点的回调
 
 	// DNSConfigPath points to the system's DNS config file, usually located
 	// at /etc/resolv.conf. It can be overridden via config for easier testing.
@@ -237,6 +241,7 @@ type Config struct {
 	// DeadNodeReclaimTime controls the time before a dead node's name can be
 	// reclaimed by one with a different address or port. By default, this is 0,
 	// meaning nodes cannot be reclaimed this way.
+	// 节点修改addr,ip导致从dead状态变更成alive状态的合法时间间隔,超过此时间拒绝状态变更
 	DeadNodeReclaimTime time.Duration
 
 	// RequireNodeNames controls if the name of a node is required when sending
@@ -245,6 +250,7 @@ type Config struct {
 	// CIDRsAllowed If nil, allow any connection (default), otherwise specify all networks
 	// allowed to connect (you must specify IPv6/IPv4 separately)
 	// Using [] will block all connections.
+	// 限制特定的ip加入集群 不填就不限制
 	CIDRsAllowed []net.IPNet
 }
 
@@ -335,15 +341,19 @@ func DefaultWANConfig() *Config {
 }
 
 // IPMustBeChecked return true if IPAllowed must be called
+// 是否限制ip
 func (c *Config) IPMustBeChecked() bool {
 	return len(c.CIDRsAllowed) > 0
 }
 
 // IPAllowed return an error if access to memberlist is denied
+// 是否允许加入集群
 func (c *Config) IPAllowed(ip net.IP) error {
 	if !c.IPMustBeChecked() {
 		return nil
 	}
+
+	// 校验ip是否在allowed配置里面
 	for _, n := range c.CIDRsAllowed {
 		if n.Contains(ip) {
 			return nil

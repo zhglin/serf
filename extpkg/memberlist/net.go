@@ -19,7 +19,7 @@ import (
 // _understand_. We're allowed to speak at any version within this
 // range. This range is inclusive.
 const (
-	ProtocolVersionMin uint8 = 1
+	ProtocolVersionMin uint8 = 1 // memberlist层支持的协议最小版本号
 
 	// Version 3 added support for TCP pings but we kept the default
 	// protocol version at 2 to ease transition to this new feature.
@@ -34,7 +34,7 @@ const (
 	// understand version 4 or greater.
 	ProtocolVersion2Compatible = 2
 
-	ProtocolVersionMax = 5
+	ProtocolVersionMax = 5 // memberlist层支持的协议最大版本号
 )
 
 // messageType is an integer ID of a type of message that can be received
@@ -69,7 +69,7 @@ const (
 
 const (
 	MetaMaxSize            = 512 // Maximum size for node meta data
-	compoundHeaderOverhead = 2   // Assumed header overhead
+	compoundHeaderOverhead = 2   // Assumed header overhead  复合类型的消息头占用的字节长度 2个unit8(类型+长度)
 	compoundOverhead       = 2   // Assumed overhead per entry in compoundHeader
 	userMsgOverhead        = 1
 	blockingWarning        = 10 * time.Millisecond // Warn if a UDP packet takes this long to process
@@ -140,8 +140,8 @@ type suspect struct {
 type alive struct {
 	Incarnation uint32 // 编号
 	Node        string // 名称
-	Addr        []byte // ip地址
-	Port        uint16 // 端口号
+	Addr        []byte // Advertise ip地址
+	Port        uint16 // Advertise 端口号
 	Meta        []byte // tag
 
 	// The versions of the protocol/delegate that are being spoken, order:
@@ -421,6 +421,7 @@ func (m *Memberlist) handleCommand(buf []byte, from net.Addr, timestamp time.Tim
 }
 
 // getNextMessage returns the next message to process in priority order, using LIFO
+// 获取队列中的udp报文 优先处理高优先级任务
 func (m *Memberlist) getNextMessage() (msgHandoff, bool) {
 	m.msgQueueLock.Lock()
 	defer m.msgQueueLock.Unlock()

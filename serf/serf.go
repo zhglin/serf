@@ -26,6 +26,7 @@ import (
 // These are the protocol versions that Serf can _understand_. These are
 // Serf-level protocol versions that are passed down as the delegate
 // version to memberlist below.
+// serf层支持的协议版本号
 const (
 	ProtocolVersionMin uint8 = 2
 	ProtocolVersionMax       = 5
@@ -37,7 +38,7 @@ const (
 	tagMagicByte uint8 = 255
 )
 
-const MaxNodeNameLength int = 128
+const MaxNodeNameLength int = 128 // member 名字长度限制
 
 var (
 	// FeatureNotSupported is returned if a feature cannot be used
@@ -88,11 +89,15 @@ type Serf struct {
 	eventMinTime    LamportTime
 	eventLock       sync.RWMutex
 
+	// 需要进行广播的队列 传递到memberList层
 	queryBroadcasts *memberlist.TransmitLimitedQueue
-	queryBuffer     []*queries
-	queryMinTime    LamportTime
-	queryResponse   map[LamportTime]*QueryResponse
-	queryLock       sync.RWMutex
+	// 历史query消息 用来判定是否过期消息
+	queryBuffer  []*queries
+	queryMinTime LamportTime
+	// query消息的请求以及响应 消息体的中lamportTime做为key，没有长度闲置，query超时会删除
+	queryResponse map[LamportTime]*QueryResponse
+	// 操作query的读写锁
+	queryLock sync.RWMutex
 
 	logger     *log.Logger
 	joinLock   sync.Mutex
@@ -226,9 +231,10 @@ type userEvents struct {
 }
 
 // queries stores all the query ids at a specific time
+// 缓存的query消息
 type queries struct {
-	LTime    LamportTime
-	QueryIDs []uint32
+	LTime    LamportTime // 消息的LamportTime
+	QueryIDs []uint32    // 消息的id
 }
 
 const (
@@ -372,7 +378,7 @@ func Create(conf *Config) (*Serf, error) {
 
 	// Create a buffer for events and queries
 	serf.eventBuffer = make([]*userEvents, conf.EventBuffer)
-	serf.queryBuffer = make([]*queries, conf.QueryBuffer)
+	serf.queryBuffer = make([]*queries, conf.QueryBuffer) // 固定大小的数组，不会进行扩容
 
 	// Ensure our lamport clock is at least 1, so that the default
 	// join LTime of 0 does not cause issues
@@ -519,6 +525,7 @@ func (s *Serf) UserEvent(name string, payload []byte, coalesce bool) error {
 // and an error will be returned if the size limit is exceeded. This is only
 // available with protocol version 4 and newer. Query parameters are optional,
 // and if not provided, a sane set of defaults will be used.
+// name是查询的类型 payLoad查询的内容
 func (s *Serf) Query(name string, payload []byte, params *QueryParam) (*QueryResponse, error) {
 	// Check that the latest protocol is in use
 	if s.ProtocolVersion() < 4 {
@@ -574,10 +581,11 @@ func (s *Serf) Query(name string, payload []byte, params *QueryParam) (*QueryRes
 	}
 
 	// Register QueryResponse to track acks and responses
+	// 创建并注册queryResponse
 	resp := newQueryResponse(s.memberlist.NumMembers(), &q)
 	s.registerQueryResponse(params.Timeout, resp)
 
-	// Process query locally
+	// Process query locally  自己投票？
 	s.handleQuery(&q)
 
 	// Start broadcasting the event
@@ -589,6 +597,7 @@ func (s *Serf) Query(name string, payload []byte, params *QueryParam) (*QueryRes
 
 // registerQueryResponse is used to setup the listeners for the query,
 // and to schedule closing the query after the timeout.
+// 注册queryResponse 并设置超时关闭
 func (s *Serf) registerQueryResponse(timeout time.Duration, resp *QueryResponse) {
 	s.queryLock.Lock()
 	defer s.queryLock.Unlock()
@@ -598,6 +607,7 @@ func (s *Serf) registerQueryResponse(timeout time.Duration, resp *QueryResponse)
 	s.queryResponse[resp.lTime] = resp
 
 	// Setup a timer to close the response and deregister after the timeout
+	// 设置定时器 超时删除
 	time.AfterFunc(timeout, func() {
 		s.queryLock.Lock()
 		delete(s.queryResponse, resp.lTime)
@@ -1287,19 +1297,25 @@ func (s *Serf) handleUserEvent(eventMsg *messageUserEvent) bool {
 
 // handleQuery is called when a query broadcast is
 // received. Returns if the message should be rebroadcast.
+// 对方 回复query消息 返回是否需要进行广播标记
 func (s *Serf) handleQuery(query *messageQuery) bool {
 	// Witness a potentially newer time
+	// 更新当前节点的lamportTime
 	s.queryClock.Witness(query.LTime)
 
+	// 加锁 顺序处理消息
 	s.queryLock.Lock()
 	defer s.queryLock.Unlock()
 
 	// Ignore if it is before our minimum query time
+	// 基于快照的重启 校验消息是否过期
 	if query.LTime < s.queryMinTime {
 		return false
 	}
 
 	// Check if this message is too old
+	// 校验消息是否过期(太久)，len(s.queryBuffer)是缓存的curTime-LamportTime(len(s.queryBuffer)到LamportTime(len(s.queryBuffer)时间段的消息
+	// 这个判断是校验query.LTime在缓存的时间之前
 	curTime := s.queryClock.Time()
 	if curTime > LamportTime(len(s.queryBuffer)) &&
 		query.LTime < curTime-LamportTime(len(s.queryBuffer)) {
@@ -1312,21 +1328,23 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	}
 
 	// Check if we've already seen this
-	idx := query.LTime % LamportTime(len(s.queryBuffer))
+	// query.LTime在缓存的时间之后，从缓存中进行查找query.queryIds
+	idx := query.LTime % LamportTime(len(s.queryBuffer)) // LTime求余分布
 	seen := s.queryBuffer[idx]
-	if seen != nil && seen.LTime == query.LTime {
+	if seen != nil && seen.LTime == query.LTime { //queryBuffer[idx]中的LTime相同
 		for _, previous := range seen.QueryIDs {
-			if previous == query.ID {
+			if previous == query.ID { // 查询到了相同的query.ID
 				// Seen this ID already
 				return false
 			}
 		}
-	} else {
+	} else { // 更新queryBuffer[idx]的LTime
 		seen = &queries{LTime: query.LTime}
 		s.queryBuffer[idx] = seen
 	}
 
 	// Add to recent queries
+	// 加入当前的query.Id
 	seen.QueryIDs = append(seen.QueryIDs, query.ID)
 
 	// Update some metrics
@@ -1340,6 +1358,7 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	}
 
 	// Filter the query
+	// 不符合filters 不需要进行回复 但是依然会进行广播
 	if !s.shouldProcessQuery(query.Filters) {
 		// Even if we don't process it further, we should rebroadcast,
 		// since it is the first time we've seen this.
@@ -1347,7 +1366,8 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	}
 
 	// Send ack if requested, without waiting for client to Respond()
-	if query.Ack() {
+	if query.Ack() { // 需要ack 对query进行回复
+		// ack的固定响应内容
 		ack := messageQueryResponse{
 			LTime: query.LTime,
 			ID:    query.ID,
@@ -1372,10 +1392,12 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 		}
 	}
 
+	// 收到messageQueryType的消息后写入chain
+	// 异步处理具体的query逻辑 internal_query
 	if s.config.EventCh != nil {
 		s.config.EventCh <- &Query{
 			LTime:       query.LTime,
-			Name:        query.Name,
+			Name:        query.Name, // query的类型
 			Payload:     query.Payload,
 			serf:        s,
 			id:          query.ID,
@@ -1391,10 +1413,11 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 
 // handleResponse is called when a query response is
 // received.
+// 收到query消息的的回复
 func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 	// Look for a corresponding QueryResponse
 	s.queryLock.RLock()
-	query, ok := s.queryResponse[resp.LTime]
+	query, ok := s.queryResponse[resp.LTime] // 回复的是哪个消息
 	s.queryLock.RUnlock()
 	if !ok {
 		s.logger.Printf("[WARN] serf: reply for non-running query (LTime: %d, ID: %d) From: %s",
@@ -1402,7 +1425,7 @@ func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 		return
 	}
 
-	// Verify the ID matches
+	// Verify the ID matches 请求的id与回复的id不匹配
 	if query.id != resp.ID {
 		s.logger.Printf("[WARN] serf: query reply ID mismatch (Local: %d, Response: %d)",
 			query.id, resp.ID)
@@ -1415,8 +1438,9 @@ func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 	}
 
 	// Process each type of response
-	if resp.Ack() {
+	if resp.Ack() { // 只需要ack，不需要响应内容
 		// Exit early if this is a duplicate ack
+		// 重复ack
 		if _, ok := query.acks[resp.From]; ok {
 			metrics.IncrCounter([]string{"serf", "query_duplicate_acks"}, 1)
 			return
@@ -1424,12 +1448,12 @@ func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 
 		metrics.IncrCounter([]string{"serf", "query_acks"}, 1)
 		select {
-		case query.ackCh <- resp.From:
+		case query.ackCh <- resp.From: // 写入chain
 			query.acks[resp.From] = struct{}{}
 		default:
 			s.logger.Printf("[WARN] serf: Failed to deliver query ack, dropping")
 		}
-	} else {
+	} else { // 需要响应内容
 		// Exit early if this is a duplicate response
 		if _, ok := query.responses[resp.From]; ok {
 			metrics.IncrCounter([]string{"serf", "query_duplicate_responses"}, 1)
@@ -1447,14 +1471,17 @@ func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 // handleNodeConflict is invoked when a join detects a conflict over a name.
 // This means two different nodes (IP/Port) are claiming the same name. Memberlist
 // will reject the "new" node mapping, but we can still be notified.
+// 处理node名称相同 ip、port不同导致的冲突事件
 func (s *Serf) handleNodeConflict(existing, other *memberlist.Node) {
 	// Log a basic warning if the node is not us...
+	// name不是跟本机冲突 记日志退出
 	if existing.Name != s.config.NodeName {
 		s.logger.Printf("[WARN] serf: Name conflict for '%s' both %s:%d and %s:%d are claiming",
 			existing.Name, existing.Addr, existing.Port, other.Addr, other.Port)
 		return
 	}
 
+	// 跟本机冲突
 	// The current node is conflicting! This is an error
 	s.logger.Printf("[ERR] serf: Node name conflicts with another node at %s:%d. Names must be unique! (Resolution enabled: %v)",
 		other.Addr, other.Port, s.config.EnableNameConflictResolution)
@@ -1498,13 +1525,16 @@ func (s *Serf) resolveNodeConflict() {
 		}
 
 		// Update the counters
+		// 响应的节点总数
 		responses++
+		// 与此节点的addr port相同的响应节点数
 		if member.Addr.Equal(local.Addr) && member.Port == local.Port {
 			matching++
 		}
 	}
 
 	// Query over, determine if we should live
+	// 如果此节点已经同步到了集群中的大部分节点上了 就保持不变
 	majority := (responses / 2) + 1
 	if matching >= majority {
 		s.logger.Printf("[INFO] serf: majority in name conflict resolution [%d / %d]",
@@ -1513,6 +1543,7 @@ func (s *Serf) resolveNodeConflict() {
 	}
 
 	// Since we lost the vote, we need to exit
+	// 否则就下线
 	s.logger.Printf("[WARN] serf: minority in name conflict resolution, quiting [%d / %d]",
 		matching, responses)
 	if err := s.Shutdown(); err != nil {
@@ -1792,6 +1823,7 @@ func (s *Serf) encodeTags(tags map[string]string) []byte {
 }
 
 // decodeTags is used to decode a tag map
+// 对tag进行解码
 func (s *Serf) decodeTags(buf []byte) map[string]string {
 	tags := make(map[string]string)
 
@@ -1910,6 +1942,7 @@ func (s *Serf) ValidateNodeNames() error {
 	return s.validateNodeName(s.config.NodeName)
 }
 
+// 校验member名称
 func (s *Serf) validateNodeName(name string) error {
 	if s.config.ValidateNodeNames {
 		var InvalidNameRe = regexp.MustCompile(`[^A-Za-z0-9\-\.]+`)
@@ -1917,6 +1950,8 @@ func (s *Serf) validateNodeName(name string) error {
 			return fmt.Errorf("Node name contains invalid characters %v , Valid characters include "+
 				"all alpha-numerics and dashes and '.' ", name)
 		}
+
+		// 最大长度
 		if len(name) > MaxNodeNameLength {
 			return fmt.Errorf("Node name is %v characters. "+
 				"Valid length is between 1 and 128 characters", len(name))

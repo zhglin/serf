@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/extpkg/memberlist"
 )
 
 type MergeDelegate interface {
@@ -35,6 +35,7 @@ func (m *mergeDelegate) NotifyAlive(peer *memberlist.Node) error {
 	return m.serf.config.Merge.NotifyMerge([]*Member{member})
 }
 
+// node类型转换成member类型  处在不同的层次
 func (m *mergeDelegate) nodeToMember(n *memberlist.Node) (*Member, error) {
 	status := StatusNone
 	if n.State == memberlist.StateLeft {
@@ -59,15 +60,19 @@ func (m *mergeDelegate) nodeToMember(n *memberlist.Node) (*Member, error) {
 }
 
 // validateMemberInfo checks that the data we are sending is valid
+// 校验member是否合法
 func (m *mergeDelegate) validateMemberInfo(n *memberlist.Node) error {
+	// 校验名称
 	if err := m.serf.validateNodeName(n.Name); err != nil {
 		return err
 	}
 
+	// addr
 	if len(n.Addr) != 4 && len(n.Addr) != 16 {
 		return fmt.Errorf("IP byte length is invalid: %d bytes is not either 4 or 16", len(n.Addr))
 	}
 
+	// meta编码后的长度
 	if len(n.Meta) > memberlist.MetaMaxSize {
 		return fmt.Errorf("Encoded length of tags exceeds limit of %d bytes",
 			memberlist.MetaMaxSize)

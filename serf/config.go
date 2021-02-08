@@ -14,6 +14,7 @@ import (
 // our own protocol version.
 var ProtocolVersionMap map[uint8]uint8
 
+// serf层的协议版本号 对应的的memberlist层的协议版本号
 func init() {
 	ProtocolVersionMap = map[uint8]uint8{
 		5: 2,
@@ -47,7 +48,7 @@ type Config struct {
 
 	// ProtocolVersion is the protocol version to speak. This must be between
 	// ProtocolVersionMin and ProtocolVersionMax.
-	// 协议版本号
+	// serf层当前使用的版本号
 	ProtocolVersion uint8
 
 	// BroadcastTimeout is the amount of time to wait for a broadcast
@@ -162,6 +163,7 @@ type Config struct {
 	// deliver queries older than the oldest entry in the buffer.
 	// Thus if a client is generating too many queries, it's possible that the
 	// buffer gets overrun and messages are not delivered.
+	// 缓存最近多少个LamportTime时长的查询记录，用来做过期消息的丢弃。如果客户机生成了太多的查询，可能会导致缓冲区溢出，从而无法传递消息
 	QueryBuffer int
 
 	// QueryTimeoutMult configures the default timeout multipler for a query to run if no
@@ -182,7 +184,8 @@ type Config struct {
 	// past the default values of 1024 will depend on your network
 	// configuration.
 	QueryResponseSizeLimit int
-	QuerySizeLimit         int
+	// query消息的报文长度限制
+	QuerySizeLimit int
 
 	// MemberlistConfig is the memberlist configuration that Serf will
 	// use to do the underlying membership management and gossip. Some
@@ -242,6 +245,7 @@ type Config struct {
 
 	// Merge can be optionally provided to intercept a cluster merge
 	// and conditionally abort the merge.
+	// memberList的回调
 	Merge MergeDelegate
 
 	// UserEventSizeLimit is maximum byte size limit of user event `name` + `payload` in bytes.
@@ -263,6 +267,7 @@ type Config struct {
 	// ValidateNodeNames controls whether nodenames only
 	// contain alphanumeric, dashes and '.'characters
 	// and sets maximum length to 128 characters
+	// 是否校验member的名称
 	ValidateNodeNames bool
 }
 

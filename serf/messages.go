@@ -84,7 +84,7 @@ type messageQuery struct {
 	Addr        []byte        // Source address, used for a direct reply
 	Port        uint16        // Source port, used for a direct reply
 	SourceNode  string        // Source name, used for a direct reply
-	Filters     [][]byte      // Potential query filters
+	Filters     [][]byte      // Potential query filters	符合Filters的node才会进行响应
 	Flags       uint32        // Used to provide various flags
 	RelayFactor uint8         // Used to set the number of duplicate relayed responses
 	Timeout     time.Duration // Maximum time between delivery and response
@@ -123,6 +123,7 @@ type messageQueryResponse struct {
 }
 
 // Ack checks if the ack flag is set
+// 请求是否需要应答
 func (m *messageQueryResponse) Ack() bool {
 	return (m.Flags & queryFlagAck) != 0
 }
