@@ -13,10 +13,12 @@ type Coordinate struct {
 	// Vec is the Euclidean portion of the coordinate. This is used along
 	// with the other fields to provide an overall distance estimate. The
 	// units here are seconds.
+	// Vec是坐标的欧几里得部分。它与其他字段一起用于提供总距离估计。这里的单位是秒。
 	Vec []float64
 
 	// Err reflects the confidence in the given coordinate and is updated
 	// dynamically by the Vivaldi Client. This is dimensionless.
+	// Err反映给定坐标中的置信度，并由Vivaldi客户机动态更新。这是无量纲。
 	Error float64
 
 	// Adjustment is a distance offset computed based on a calculation over
@@ -74,12 +76,14 @@ func (c *Coordinate) Clone() *Coordinate {
 
 // componentIsValid returns false if a floating point value is a NaN or an
 // infinity.
+// componentIsValid如果浮点值是NaN或无穷大，则返回false。
 func componentIsValid(f float64) bool {
 	return !math.IsInf(f, 0) && !math.IsNaN(f)
 }
 
 // IsValid returns false if any component of a coordinate isn't valid, per the
 // componentIsValid() helper above.
+// 根据上面的componentIsValid() helper，如果坐标中的任何组件无效，IsValid将返回false。
 func (c *Coordinate) IsValid() bool {
 	for i := range c.Vec {
 		if !componentIsValid(c.Vec[i]) {
@@ -95,6 +99,7 @@ func (c *Coordinate) IsValid() bool {
 // IsCompatibleWith checks to see if the two coordinates are compatible
 // dimensionally. If this returns true then you are guaranteed to not get
 // any runtime errors operating on them.
+// 检查这两个坐标在尺寸上是否兼容。如果返回true，则保证不会出现运行时错误。
 func (c *Coordinate) IsCompatibleWith(other *Coordinate) bool {
 	return len(c.Vec) == len(other.Vec)
 }

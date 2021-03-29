@@ -373,7 +373,7 @@ func (t *NetTransport) udpListen(udpLn *net.UDPConn) {
 // setUDPRecvBuf is used to resize the UDP receive window. The function
 // attempts to set the read buffer to `udpRecvBuf` but backs off until
 // the read buffer can be set.
-// 设置接收缓冲大小
+// 设置UDP接收缓冲大小
 func setUDPRecvBuf(c *net.UDPConn) error {
 	size := udpRecvBufSize
 	var err error

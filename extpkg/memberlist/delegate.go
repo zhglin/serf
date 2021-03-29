@@ -3,7 +3,7 @@ package memberlist
 // Delegate is the interface that clients must implement if they want to hook
 // into the gossip layer of Memberlist. All the methods must be thread-safe,
 // as they can and generally will be called concurrently.
-// 需要上层实现的委托接口 处理gossip协议 需要线程安全
+// 需要上层实现的委托接口 处理gossip协议 需要线程安全 serf/delegate.go
 type Delegate interface {
 	// NodeMeta is used to retrieve meta-data about the current node
 	// when broadcasting an alive message. It's length is limited to

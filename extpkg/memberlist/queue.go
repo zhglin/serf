@@ -320,7 +320,7 @@ func (q *TransmitLimitedQueue) GetBroadcasts(overhead, limit int) [][]byte {
 		return nil
 	}
 
-	// 报文的重试次数
+	// 报文的重试次数上限
 	transmitLimit := retransmitLimit(q.RetransmitMult, q.NumNodes())
 
 	var (

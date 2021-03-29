@@ -41,6 +41,7 @@ type Config struct {
 	// ProtocolVersion is the configured protocol version that we
 	// will _speak_. This must be between ProtocolVersionMin and
 	// ProtocolVersionMax.
+	// ProtocolVersion是我们要讲的配置协议版本。必须在ProtocolVersionMin和ProtocolVersionMax之间。
 	// memberList层的的协议版本号
 	ProtocolVersion uint8
 
@@ -49,6 +50,8 @@ type Config struct {
 	// operations. This is a legacy name for backwards compatibility, but
 	// should really be called StreamTimeout now that we have generalized
 	// the transport.
+	// TCPTimeout是与远程节点建立流连接以实现全状态同步的超时时间，以及流读写操作的超时时间。
+	// 这是为了向后兼容性而使用的一个传统名称，但是现在我们已经将传输一般化了，所以应该真正地称为StreamTimeout。
 	// tcp conn的读写超时时间
 	TCPTimeout time.Duration
 
@@ -57,6 +60,8 @@ type Config struct {
 	// waits for an ack from any single indirect node, so increasing this
 	// number will increase the likelihood that an indirect probe will succeed
 	// at the expense of bandwidth.
+	// IndirectChecks是在直接探测失败的情况下，要求对节点执行间接探测的节点数量。
+	// Memberlist等待来自任何一个间接节点的ack，因此增加这个数字将增加间接探测成功的可能性，但代价是带宽。
 	IndirectChecks int
 
 	// RetransmitMult is the multiplier for the number of retransmissions
@@ -82,6 +87,11 @@ type Config struct {
 	// an inaccessible node is considered part of the cluster before declaring
 	// it dead, giving that suspect node more time to refute if it is indeed
 	// still alive.
+	// SuspicionMult是一个乘数，用于确定一个无法访问的节点在宣布它死亡之前被认为是可疑的时间。
+	// 实际的超时是通过以下公式计算的:SuspicionTimeout = SuspicionMult * log(N+1) * ProbeInterval(随机节点探测的间隔时间)，
+	// 这允许在更大的集群大小下，超时以预期的传播延迟适当地扩展。
+	// 乘数越高，无法访问的节点被认为是集群的一部分的时间就越长，然后才会宣布它已死亡，
+	// 从而给可疑节点更多的时间来反驳它是否确实仍然是活的。
 	SuspicionMult int
 
 	// SuspicionMaxTimeoutMult is the multiplier applied to the
@@ -99,6 +109,12 @@ type Config struct {
 	// recover before falsely declaring other nodes as failed, but short
 	// enough for a legitimately isolated node to still make progress marking
 	// nodes failed in a reasonable amount of time.
+	// SuspicionMaxTimeoutMult是应用于SuspicionTimeout的乘数，它被用作检测时间的上限。这个最大超时是通过以下公式计算的:
+	// 		SuspicionMaxTimeout = SuspicionMaxTimeoutMult * SuspicionTimeout
+	// 如果一切都正常工作，来自其他节点的确认将加速怀疑计时器的速度，从而导致超时在过期之前达到基本的怀疑超时(最小的超时时间)，
+	// 所以这个值通常只在节点与其他节点的通信出现问题时起作用。它应该被设置为一个相当大的东西,
+	// 以便出现问题的节点在错误地声明其他节点失败之前有很多机会恢复，
+	// 但是足够短的时间，使得合法隔离的节点仍能取得进展标记节点在合理的时间内失败。
 	SuspicionMaxTimeoutMult int
 
 	// PushPullInterval is the interval between complete state syncs.
@@ -109,6 +125,9 @@ type Config struct {
 	// Setting this interval lower (more frequent) will increase convergence
 	// speeds across larger clusters at the expense of increased bandwidth
 	// usage.
+	// PushPullInterval是完全状态同步之间的间隔。
+	// 完全的状态同步是通过TCP在一个节点上完成的，相对于标准的八卦消息来说，这是非常昂贵的。将此设置为0将完全禁用推/拉同步状态。
+	// 将此间隔设置得更低(更频繁)将提高大型集群之间的收敛速度，但代价是增加带宽使用。
 	PushPullInterval time.Duration
 
 	// ProbeInterval and ProbeTimeout are used to configure probing
@@ -121,25 +140,33 @@ type Config struct {
 	// ProbeTimeout is the timeout to wait for an ack from a probed node
 	// before assuming it is unhealthy. This should be set to 99-percentile
 	// of RTT (round-trip time) on your network.
+	//ProbeInterval和ProbeTimeout用于配置memberlist的探测行为。
+	//ProbeInterval是随机节点探测的间隔时间。将此值设置得更低(更频繁)将导致memberlist集群更快地检测出故障节点，但代价是增加了带宽使用。
+	//ProbeTimeout是在认为被探测节点不健康之前等待来自被探测节点的ack的超时。这应该设置为网络上RTT(往返时间)的99%。
 	ProbeInterval time.Duration
-	ProbeTimeout  time.Duration
+	ProbeTimeout  time.Duration // 配置的网络超时时间
 
 	// DisableTcpPings will turn off the fallback TCP pings that are attempted
 	// if the direct UDP ping fails. These get pipelined along with the
 	// indirect UDP pings.
+	// DisableTcpPings将关闭在直接UDP ping失败时尝试的回退TCP ping。这些与间接的UDP ping一起被流水线化。
 	DisableTcpPings bool
 
 	// DisableTcpPingsForNode is like DisableTcpPings, but lets you control
 	// whether to perform TCP pings on a node-by-node basis.
+	// DisableTcpPingsForNode与DisableTcpPings类似，但允许您控制是否逐个节点执行TCP ping。
 	DisableTcpPingsForNode func(nodeName string) bool
 
 	// AwarenessMaxMultiplier will increase the probe interval if the node
 	// becomes aware that it might be degraded and not meeting the soft real
 	// time requirements to reliably probe other nodes.
+	// AwarenessMaxMultiplier在节点意识到自己可能被降级，无法满足可靠探测其他节点的软实时性要求时，会增加探测间隔。
+	// 超时时间最大能增加到多少倍
 	AwarenessMaxMultiplier int
 
 	// GossipInterval and GossipNodes are used to configure the gossip
 	// behavior of memberlist.
+	// 用于配置成员列表的八卦行为。
 	//
 	// GossipInterval is the interval between sending messages that need
 	// to be gossiped that haven't been able to piggyback on probing messages.
@@ -154,8 +181,10 @@ type Config struct {
 	//
 	// GossipToTheDeadTime is the interval after which a node has died that
 	// we will still try to gossip to it. This gives it a chance to refute.
-	GossipInterval      time.Duration
-	GossipNodes         int
+	GossipInterval time.Duration
+	GossipNodes    int
+	// 持续deadTime的时间,如果变更到deadTime的时间距当前时间大于GossipToTheDeadTime,就认为已经dead
+	// 我们仍然会尝试向它闲谈。这给了它反驳的机会。
 	GossipToTheDeadTime time.Duration
 
 	// GossipVerifyIncoming controls whether to enforce encryption for incoming
@@ -166,6 +195,7 @@ type Config struct {
 	// GossipVerifyOutgoing controls whether to enforce encryption for outgoing
 	// gossip. It is used for upshifting from unencrypted to encrypted gossip on
 	// a running cluster.
+	// 控制是否对传出的流言强制加密。它用于在运行的集群上从未加密的八卦升级到加密的八卦。
 	GossipVerifyOutgoing bool
 
 	// EnableCompression is used to control message compression. This can
@@ -202,11 +232,13 @@ type Config struct {
 	DelegateProtocolMin uint8
 	// serf层支持的最大的协议版本号
 	DelegateProtocolMax uint8
-	Events              EventDelegate
-	Conflict            ConflictDelegate // node名称冲突的事件回调
-	Merge               MergeDelegate
-	Ping                PingDelegate
-	Alive               AliveDelegate // serf层设置的活跃节点的回调
+
+	// serf层的事件处理回调
+	Events   EventDelegate    // join,leave,update事件 conf.MemberlistConfig.Events = &eventDelegate{serf: serf}
+	Conflict ConflictDelegate // node名称冲突的事件回调  conf.MemberlistConfig.Conflict = &conflictDelegate{serf: serf}
+	Merge    MergeDelegate    // tcp进行节点同步的回调
+	Ping     PingDelegate     // ping消息回调 用于计算节点坐标  conf.MemberlistConfig.Ping = &pingDelegate{serf: serf}
+	Alive    AliveDelegate    // serf层设置的活跃节点的回调
 
 	// DNSConfigPath points to the system's DNS config file, usually located
 	// at /etc/resolv.conf. It can be overridden via config for easier testing.
@@ -246,10 +278,12 @@ type Config struct {
 
 	// RequireNodeNames controls if the name of a node is required when sending
 	// a message to that node.
+	// 发送消息是否必须携带node名称
 	RequireNodeNames bool
 	// CIDRsAllowed If nil, allow any connection (default), otherwise specify all networks
 	// allowed to connect (you must specify IPv6/IPv4 separately)
 	// Using [] will block all connections.
+	// CIDRsAllowed如果为nil，则允许任何连接(默认值)，否则指定所有允许连接的网络(必须单独指定IPv6/IPv4)使用[]将阻塞所有连接。
 	// 限制特定的ip加入集群 不填就不限制
 	CIDRsAllowed []net.IPNet
 }

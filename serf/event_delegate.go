@@ -12,6 +12,7 @@ func (e *eventDelegate) NotifyJoin(n *memberlist.Node) {
 	e.serf.handleNodeJoin(n)
 }
 
+// seft的leave消息回调
 func (e *eventDelegate) NotifyLeave(n *memberlist.Node) {
 	e.serf.handleNodeLeave(n)
 }

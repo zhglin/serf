@@ -26,6 +26,7 @@ const (
 
 // AckPayload is called to produce a payload to send back in response to a ping
 // request.
+// serf层 响应ping信息
 func (p *pingDelegate) AckPayload() []byte {
 	var buf bytes.Buffer
 
@@ -43,6 +44,7 @@ func (p *pingDelegate) AckPayload() []byte {
 
 // NotifyPingComplete is called when this node successfully completes a direct ping
 // of a peer node.
+// 正常响应ping信息 计算坐标
 func (p *pingDelegate) NotifyPingComplete(other *memberlist.Node, rtt time.Duration, payload []byte) {
 	if payload == nil || len(payload) == 0 {
 		return

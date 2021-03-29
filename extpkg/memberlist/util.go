@@ -62,9 +62,14 @@ func randomOffset(n int) int {
 
 // suspicionTimeout computes the timeout that should be used when
 // a node is suspected
+// suspicious timeout计算节点被怀疑时应该使用的超时时间  最小的
+// n 是所有的节点数
+// interval 是ping的周期时间
+// 将所有节点数以log10缩小 缩小的倍数*interval(代表整个集群需要的周期数)  *suspicionMult(放大一些时间)
 func suspicionTimeout(suspicionMult, n int, interval time.Duration) time.Duration {
 	nodeScale := math.Max(1.0, math.Log10(math.Max(1.0, float64(n))))
 	// multiply by 1000 to keep some precision because time.Duration is an int64 type
+	// 乘以1000以保持一定的精度，因为时间。Duration是一个int64类型
 	timeout := time.Duration(suspicionMult) * time.Duration(nodeScale*1000) * interval / 1000
 	return timeout
 }
@@ -78,6 +83,7 @@ func retransmitLimit(retransmitMult, n int) int {
 }
 
 // shuffleNodes randomly shuffles the input nodes using the Fisher-Yates shuffle
+// 对nodes进行重新洗牌
 func shuffleNodes(nodes []*nodeState) {
 	n := len(nodes)
 	rand.Shuffle(n, func(i, j int) {
@@ -88,18 +94,22 @@ func shuffleNodes(nodes []*nodeState) {
 // pushPushScale is used to scale the time interval at which push/pull
 // syncs take place. It is used to prevent network saturation as the
 // cluster size grows
+// pushPushScale用于衡量推/拉同步发生的时间间隔。它用于防止随着簇大小增长而导致的网络饱和
 func pushPullScale(interval time.Duration, n int) time.Duration {
 	// Don't scale until we cross the threshold
+	// 节点数没有达到pushPullScaleThreshold不更改时间，使用配置的间隔时间
 	if n <= pushPullScaleThreshold {
 		return interval
 	}
 
+	// 随着节点数的增加 增加对应的时间间隔 节点数放大的倍数
 	multiplier := math.Ceil(math.Log2(float64(n))-math.Log2(pushPullScaleThreshold)) + 1.0
 	return time.Duration(multiplier) * interval
 }
 
 // moveDeadNodes moves nodes that are dead and beyond the gossip to the dead interval
 // to the end of the slice and returns the index of the first moved node.
+// 移动stateDead的节点放到最后 返回第一个dead的节点下标
 func moveDeadNodes(nodes []*nodeState, gossipToTheDeadTime time.Duration) int {
 	numDead := 0
 	n := len(nodes)
@@ -109,14 +119,16 @@ func moveDeadNodes(nodes []*nodeState, gossipToTheDeadTime time.Duration) int {
 		}
 
 		// Respect the gossip to the dead interval
+		// 已经标记为dead但是未达到gossipToTheDeadTime时间间隔
 		if time.Since(nodes[i].StateChange) <= gossipToTheDeadTime {
 			continue
 		}
 
 		// Move this node to the end
+		// 已经dead的节点交换到最后
 		nodes[i], nodes[n-numDead-1] = nodes[n-numDead-1], nodes[i]
 		numDead++
-		i--
+		i-- // 交换过来的节点可能是个dead节点 要重新进行校验
 	}
 	return n - numDead
 }
@@ -124,6 +136,7 @@ func moveDeadNodes(nodes []*nodeState, gossipToTheDeadTime time.Duration) int {
 // kRandomNodes is used to select up to k random nodes, excluding any nodes where
 // the filter function returns true. It is possible that less than k nodes are
 // returned.
+// kRandomNodes用于选择最多k个随机节点，不包括filter函数返回true的任何节点。返回的节点可能少于k个。
 func kRandomNodes(k int, nodes []*nodeState, filterFn func(*nodeState) bool) []*nodeState {
 	n := len(nodes)
 	kNodes := make([]*nodeState, 0, k)
@@ -133,15 +146,18 @@ OUTER:
 	// exhaustive
 	for i := 0; i < 3*n && len(kNodes) < k; i++ {
 		// Get random node
+		// 每次在0-n之间随机 会有重复的情况
 		idx := randomOffset(n)
 		node := nodes[idx]
 
 		// Give the filter a shot at it.
+		// filterFn过滤
 		if filterFn != nil && filterFn(node) {
 			continue OUTER
 		}
 
 		// Check if we have this node already
+		// 之前已经被随机到了
 		for j := 0; j < len(kNodes); j++ {
 			if node == kNodes[j] {
 				continue OUTER
@@ -222,6 +238,7 @@ func decodeCompoundMessage(buf []byte) (trunc int, parts [][]byte, err error) {
 // compressPayload takes an opaque input buffer, compresses it
 // and wraps it in a compress{} message that is encoded.
 // 数据压缩
+// compressPayload接受一个不透明的输入缓冲区，对其进行压缩，并将其封装在经过编码的compress{}消息中。
 func compressPayload(inp []byte) (*bytes.Buffer, error) {
 	var buf bytes.Buffer
 	compressor := lzw.NewWriter(&buf, lzw.LSB, lzwLitWidth)

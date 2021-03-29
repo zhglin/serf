@@ -44,6 +44,7 @@ type Config struct {
 	// within Serf itself. If no EventCh is specified, no events will be fired,
 	// but point-in-time snapshots of members can still be retrieved by
 	// calling Members on Serf.
+	// Create(conf *Config)
 	EventCh chan<- Event
 
 	// ProtocolVersion is the protocol version to speak. This must be between
@@ -237,6 +238,9 @@ type Config struct {
 	// node's network coordinate internally. A network coordinate is useful
 	// for estimating the network distance (i.e. round trip time) between
 	// two nodes. Enabling this option adds some overhead to ping messages.
+	// 如果Serf将在内部维持该节点的网络坐标的估计值，则禁用该控件。
+	// 网络坐标对于估计两个节点之间的网络距离(即往返时间)是有用的。
+	// 启用这个选项会给ping消息增加一些开销。
 	DisableCoordinates bool
 
 	// KeyringFile provides the location of a writable file where Serf can
@@ -258,6 +262,7 @@ type Config struct {
 	//
 	// WARNING: this should ONLY be used in tests
 	// 回复消息的回调 判断是否丢弃
+	// messageDropper是一个回调函数，用于选择性地忽略入站八卦消息。这应该只在需要仔细控制消息到达顺序的单元测试中使用
 	messageDropper func(typ messageType) bool
 
 	// ReconnectTimeoutOverride is an optional interface which when present allows

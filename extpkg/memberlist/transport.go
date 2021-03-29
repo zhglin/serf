@@ -26,7 +26,7 @@ type Packet struct {
 // Transport is used to abstract over communicating with other peers. The packet
 // interface is assumed to be best-effort and the stream interface is assumed to
 // be reliable.
-// 链接的管理  建立链接 发送数据 获取数据
+// 链接的管理  建立链接 发送数据 获取数据 net_transport.go
 type Transport interface {
 	// FinalAdvertiseAddr is given the user's configured values (which
 	// might be empty) and returns the desired IP and port to advertise to
@@ -55,6 +55,8 @@ type Transport interface {
 	// than packet connections so is used for more infrequent operations
 	// such as anti-entropy or fallback probes if the packet-oriented probe
 	// failed.
+	// DialTimeout用于创建一个连接，允许我们与对等体进行双向通信。
+	// 这通常比包连接更昂贵，因此用于更不频繁的操作，如反熵或面向包的探测失败时的回退探测。
 	DialTimeout(addr string, timeout time.Duration) (net.Conn, error)
 
 	// StreamCh returns a channel that can be read to handle incoming stream

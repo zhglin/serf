@@ -12,6 +12,7 @@ are contradictory. For example, if we send "{suspect M1 inc: 1},
 then a following {alive M1 inc: 2} will invalidate that message
 */
 
+// 需要去重的broadcast
 type memberlistBroadcast struct {
 	node   string
 	msg    []byte

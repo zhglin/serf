@@ -75,7 +75,7 @@ type Serf struct {
 	leftMembers   []*memberState
 	memberlist    *memberlist.Memberlist
 	memberLock    sync.RWMutex
-	members       map[string]*memberState
+	members       map[string]*memberState // serf层的节点信息 name=>state
 
 	// recentIntents the lamport time and type of intent for a given node in
 	// case we get an intent before the relevant memberlist event. This is
@@ -360,6 +360,7 @@ func Create(conf *Config) (*Serf, error) {
 
 	// Setup the various broadcast queues, which we use to send our own
 	// custom broadcasts along the gossip channel.
+	// 设置各种广播队列，我们使用这些队列沿着八卦频道发送我们自己的定制广播。
 	serf.broadcasts = &memberlist.TransmitLimitedQueue{
 		NumNodes:       serf.NumNodes,
 		RetransmitMult: conf.MemberlistConfig.RetransmitMult,
@@ -929,6 +930,7 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 	s.memberLock.Lock()
 	defer s.memberLock.Unlock()
 
+	// 是否丢弃
 	if s.config.messageDropper(messageJoinType) {
 		return
 	}

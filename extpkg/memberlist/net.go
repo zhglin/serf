@@ -44,18 +44,18 @@ type messageType uint8
 // The list of available message types.
 // 有效的消息类型
 const (
-	pingMsg messageType = iota
-	indirectPingMsg
-	ackRespMsg
-	suspectMsg
-	aliveMsg
+	pingMsg         messageType = iota // ping请求
+	indirectPingMsg                    // 间接ping
+	ackRespMsg                         // ping的ack消息
+	suspectMsg                         // 可疑的dead消息
+	aliveMsg                           // alive消息
 	deadMsg
-	pushPullMsg
+	pushPullMsg // tcp节点同步
 	compoundMsg
 	userMsg // User mesg, not handled by us
 	compressMsg
 	encryptMsg
-	nackRespMsg
+	nackRespMsg // ping的nack消息
 	hasCrcMsg
 	errMsg
 )
@@ -78,29 +78,35 @@ const (
 )
 
 // ping request sent directly to node
+// ping的消息内容
 type ping struct {
-	SeqNo uint32
+	SeqNo uint32 // 请求序列号
 
 	// Node is sent so the target can verify they are
 	// the intended recipient. This is to protect again an agent
 	// restart with a new name.
+	// 目标节点名称 用来校验目标节点是否丢弃消息 (目标节点改名)
 	Node string
 
+	// 发送方地址
 	SourceAddr []byte `codec:",omitempty"` // Source address, used for a direct reply
+	// 发送方端口
 	SourcePort uint16 `codec:",omitempty"` // Source port, used for a direct reply
+	// 发送方节点名称
 	SourceNode string `codec:",omitempty"` // Source name, used for a direct reply
 }
 
 // indirect ping sent to an indirect node
+// 间接ping的消息
 type indirectPingReq struct {
-	SeqNo  uint32
-	Target []byte
-	Port   uint16
+	SeqNo  uint32 // 序列号
+	Target []byte // 目标node地址   不是间接节点的信息
+	Port   uint16 // 目标node端口号
 
 	// Node is sent so the target can verify they are
 	// the intended recipient. This is to protect against an agent
 	// restart with a new name.
-	Node string
+	Node string // 目标node名称
 
 	Nack bool // true if we'd like a nack back
 
@@ -110,9 +116,10 @@ type indirectPingReq struct {
 }
 
 // ack response is sent for a ping
+// ping的相应消息
 type ackResp struct {
-	SeqNo   uint32
-	Payload []byte
+	SeqNo   uint32 // 请求序列号
+	Payload []byte // 内容
 }
 
 // nack response is sent for an indirect ping when the pinger doesn't hear from
@@ -128,17 +135,18 @@ type errResp struct {
 }
 
 // suspect is broadcast when we suspect a node is dead
+// 可疑的消息
 type suspect struct {
-	Incarnation uint32
-	Node        string
-	From        string // Include who is suspecting
+	Incarnation uint32 // 目的节点的incarnation
+	Node        string // 目的节点的名称
+	From        string // 来源节点的名称 Include who is suspecting
 }
 
 // alive is broadcast when we know a node is alive.
 // Overloaded for nodes joining
 // alive的节点信息
 type alive struct {
-	Incarnation uint32 // 编号
+	Incarnation uint32 // 编号 判断过期的alive消息
 	Node        string // 名称
 	Addr        []byte // Advertise ip地址
 	Port        uint16 // Advertise 端口号
@@ -151,10 +159,11 @@ type alive struct {
 
 // dead is broadcast when we confirm a node is dead
 // Overloaded for nodes leaving
+// 当我们确认一个节点因节点离开而超载时，将广播dead
 type dead struct {
-	Incarnation uint32
-	Node        string
-	From        string // Include who is suspecting
+	Incarnation uint32 // dead节点的Incarnation
+	Node        string // dead节点的nodeName
+	From        string // 发送dead的nodeName 区分主动还是被动 Include who is suspecting
 }
 
 // pushPullHeader is used to inform the
@@ -215,7 +224,7 @@ func (m *Memberlist) streamListen() {
 		case conn := <-m.transport.StreamCh():
 			go m.handleConn(conn)
 
-		case <-m.shutdownCh:
+		case <-m.shutdownCh: // memberlist关闭
 			return
 		}
 	}
@@ -224,7 +233,7 @@ func (m *Memberlist) streamListen() {
 // handleConn handles a single incoming stream connection from the transport.
 // 处理conn链接
 func (m *Memberlist) handleConn(conn net.Conn) {
-	defer conn.Close()
+	defer conn.Close() // 数据接收完就关闭 conn
 	m.logger.Printf("[DEBUG] memberlist: Stream connection %s", LogConn(conn))
 
 	metrics.IncrCounter([]string{"memberlist", "tcp", "accept"}, 1)
@@ -260,27 +269,34 @@ func (m *Memberlist) handleConn(conn net.Conn) {
 			m.logger.Printf("[ERR] memberlist: Failed to receive user message: %s %s", err, LogConn(conn))
 		}
 	case pushPullMsg:
+		// 收到pushPull消息后，校验同时处理pushPull的数量
+		// 符合条件就直接回复自身的nodes节点
+		// 合并的逻辑在回复之后
 		// Increment counter of pending push/pulls
 		numConcurrent := atomic.AddUint32(&m.pushPullReq, 1)
-		defer atomic.AddUint32(&m.pushPullReq, ^uint32(0))
+		defer atomic.AddUint32(&m.pushPullReq, ^uint32(0)) // 让x减1，调用AddUint32(&x, ^uint32(0))
 
 		// Check if we have too many open push/pull requests
+		// 限制同时进行pushPUll的请求数
 		if numConcurrent >= maxPushPullRequests {
 			m.logger.Printf("[ERR] memberlist: Too many pending push/pull requests")
 			return
 		}
 
+		// 解析数据
 		join, remoteNodes, userState, err := m.readRemoteState(bufConn, dec)
 		if err != nil {
 			m.logger.Printf("[ERR] memberlist: Failed to read remote state: %s %s", err, LogConn(conn))
 			return
 		}
 
+		// 发送自身的nodes数据给对方
 		if err := m.sendLocalState(conn, join); err != nil {
 			m.logger.Printf("[ERR] memberlist: Failed to push local state: %s %s", err, LogConn(conn))
 			return
 		}
 
+		// 合并对方的nodes数据
 		if err := m.mergeRemoteState(join, remoteNodes, userState); err != nil {
 			m.logger.Printf("[ERR] memberlist: Failed push/pull merge: %s %s", err, LogConn(conn))
 			return
@@ -441,6 +457,7 @@ func (m *Memberlist) getNextMessage() (msgHandoff, bool) {
 // packetHandler is a long running goroutine that processes messages received
 // over the packet interface, but is decoupled from the listener to avoid
 // blocking the listener which may cause ping/ack messages to be delayed.
+// udp请求的消息类型处理
 func (m *Memberlist) packetHandler() {
 	for {
 		select {
@@ -493,6 +510,7 @@ func (m *Memberlist) handleCompound(buf []byte, from net.Addr, timestamp time.Ti
 	}
 }
 
+// 响应ping消息
 func (m *Memberlist) handlePing(buf []byte, from net.Addr) {
 	var p ping
 	if err := decode(buf, &p); err != nil {
@@ -500,10 +518,13 @@ func (m *Memberlist) handlePing(buf []byte, from net.Addr) {
 		return
 	}
 	// If node is provided, verify that it is for us
+	// 名称不匹配 直接丢弃
 	if p.Node != "" && p.Node != m.config.Name {
 		m.logger.Printf("[WARN] memberlist: Got ping for unexpected node '%s' %s", p.Node, LogAddress(from))
 		return
 	}
+
+	// 构建响应内容
 	var ack ackResp
 	ack.SeqNo = p.SeqNo
 	if m.config.Ping != nil {
@@ -526,6 +547,7 @@ func (m *Memberlist) handlePing(buf []byte, from net.Addr) {
 	}
 }
 
+// 间接ping
 func (m *Memberlist) handleIndirectPing(buf []byte, from net.Addr) {
 	var ind indirectPingReq
 	if err := decode(buf, &ind); err != nil {
@@ -544,7 +566,7 @@ func (m *Memberlist) handleIndirectPing(buf []byte, from net.Addr) {
 	selfAddr, selfPort := m.getAdvertise()
 	ping := ping{
 		SeqNo: localSeqNo,
-		Node:  ind.Node,
+		Node:  ind.Node, // 目标名
 		// The outbound message is addressed FROM us.
 		SourceAddr: selfAddr,
 		SourcePort: selfPort,
@@ -562,11 +584,13 @@ func (m *Memberlist) handleIndirectPing(buf []byte, from net.Addr) {
 	}
 
 	// Setup a response handler to relay the ack
+	// 注册ack的异步处理结果
 	cancelCh := make(chan struct{})
 	respHandler := func(payload []byte, timestamp time.Time) {
 		// Try to prevent the nack if we've caught it in time.
 		close(cancelCh)
 
+		// 如果对方正常响应ping结果  把ack发送回原来的node
 		ack := ackResp{ind.SeqNo, nil}
 		a := Address{
 			Addr: indAddr,
@@ -576,9 +600,11 @@ func (m *Memberlist) handleIndirectPing(buf []byte, from net.Addr) {
 			m.logger.Printf("[ERR] memberlist: Failed to forward ack: %s %s", err, LogStringAddress(indAddr))
 		}
 	}
+	// 超时时间不同
 	m.setAckHandler(localSeqNo, respHandler, m.config.ProbeTimeout)
 
 	// Send the ping.
+	// 向对方发送ping信息
 	addr := joinHostPort(net.IP(ind.Target).String(), ind.Port)
 	a := Address{
 		Addr: addr,
@@ -589,12 +615,13 @@ func (m *Memberlist) handleIndirectPing(buf []byte, from net.Addr) {
 	}
 
 	// Setup a timer to fire off a nack if no ack is seen in time.
+	// 对方节点未响应 并且需要进行nack响应
 	if ind.Nack {
 		go func() {
 			select {
-			case <-cancelCh:
+			case <-cancelCh: // 正常响应ack了直接退出
 				return
-			case <-time.After(m.config.ProbeTimeout):
+			case <-time.After(m.config.ProbeTimeout): // 向来源节点响应nack信息
 				nack := nackResp{ind.SeqNo}
 				a := Address{
 					Addr: indAddr,
@@ -608,6 +635,7 @@ func (m *Memberlist) handleIndirectPing(buf []byte, from net.Addr) {
 	}
 }
 
+// ping消息的ack响应
 func (m *Memberlist) handleAck(buf []byte, from net.Addr, timestamp time.Time) {
 	var ack ackResp
 	if err := decode(buf, &ack); err != nil {
@@ -617,6 +645,7 @@ func (m *Memberlist) handleAck(buf []byte, from net.Addr, timestamp time.Time) {
 	m.invokeAckHandler(ack, timestamp)
 }
 
+// ping的nack响应
 func (m *Memberlist) handleNack(buf []byte, from net.Addr) {
 	var nack nackResp
 	if err := decode(buf, &nack); err != nil {
@@ -626,6 +655,7 @@ func (m *Memberlist) handleNack(buf []byte, from net.Addr) {
 	m.invokeNackHandler(nack)
 }
 
+// 可疑消息
 func (m *Memberlist) handleSuspect(buf []byte, from net.Addr) {
 	var sus suspect
 	if err := decode(buf, &sus); err != nil {
@@ -657,6 +687,7 @@ func (m *Memberlist) ensureCanConnect(from net.Addr) error {
 	return m.config.IPAllowed(ip)
 }
 
+// alive消息处理
 func (m *Memberlist) handleAlive(buf []byte, from net.Addr) {
 	if err := m.ensureCanConnect(from); err != nil {
 		m.logger.Printf("[DEBUG] memberlist: Blocked alive message: %s %s", err, LogAddress(from))
@@ -679,6 +710,7 @@ func (m *Memberlist) handleAlive(buf []byte, from net.Addr) {
 
 	// For proto versions < 2, there is no port provided. Mask old
 	// behavior by using the configured port
+	// 对于原始版本< 2，没有提供端口。使用配置的端口屏蔽旧的行为
 	if m.ProtocolVersion() < 2 || live.Port == 0 {
 		live.Port = uint16(m.config.BindPort)
 	}
@@ -822,6 +854,7 @@ func (m *Memberlist) rawSendMsgPacket(a Address, node *Node, msg []byte) error {
 // rawSendMsgStream is used to stream a message to another host without
 // modification, other than applying compression and encryption if enabled.
 // 发送数据 对加密 压缩的消息类型单独处理
+// rawSendMsgStream用于在不修改的情况下将消息流发送到另一个主机，如果启用，则不应用压缩和加密。
 func (m *Memberlist) rawSendMsgStream(conn net.Conn, sendBuf []byte) error {
 	// Check if compression is enabled
 	if m.config.EnableCompression { // 压缩
@@ -847,7 +880,7 @@ func (m *Memberlist) rawSendMsgStream(conn net.Conn, sendBuf []byte) error {
 	// Write out the entire send buffer
 	metrics.IncrCounter([]string{"memberlist", "tcp", "sent"}, float32(len(sendBuf)))
 
-	// 写入响应数据
+	// 写入请求数据
 	if n, err := conn.Write(sendBuf); err != nil {
 		return err
 	} else if n != len(sendBuf) {
@@ -888,12 +921,15 @@ func (m *Memberlist) sendUserMsg(a Address, sendBuf []byte) error {
 
 // sendAndReceiveState is used to initiate a push/pull over a stream with a
 // remote host.
+// sendAndReceiveState用于在远程主机上发起推/拉流。
 func (m *Memberlist) sendAndReceiveState(a Address, join bool) ([]pushNodeState, []byte, error) {
+	// 是否需要带上nodeName
 	if a.Name == "" && m.config.RequireNodeNames {
 		return nil, nil, errNodeNamesAreRequired
 	}
 
 	// Attempt to connect
+	// 建立链接
 	conn, err := m.transport.DialAddressTimeout(a, m.config.TCPTimeout)
 	if err != nil {
 		return nil, nil, err
@@ -903,6 +939,7 @@ func (m *Memberlist) sendAndReceiveState(a Address, join bool) ([]pushNodeState,
 	metrics.IncrCounter([]string{"memberlist", "tcp", "connect"}, 1)
 
 	// Send our state
+	// 发送当前节点下的nodes
 	if err := m.sendLocalState(conn, join); err != nil {
 		return nil, nil, err
 	}
@@ -933,11 +970,14 @@ func (m *Memberlist) sendAndReceiveState(a Address, join bool) ([]pushNodeState,
 }
 
 // sendLocalState is invoked to send our local state over a stream connection.
+// 调用sendLocalState通过流连接发送我们的本地状态。
 func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	// Setup a deadline
+	// 设置一个期限
 	conn.SetDeadline(time.Now().Add(m.config.TCPTimeout))
 
 	// Prepare the local node state
+	// 复制本节点所有的节点信息
 	m.nodeLock.RLock()
 	localNodes := make([]pushNodeState, len(m.nodes))
 	for idx, n := range m.nodes {
@@ -955,6 +995,7 @@ func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	m.nodeLock.RUnlock()
 
 	// Get the delegate state
+	// serf层的节点信息
 	var userData []byte
 	if m.config.Delegate != nil {
 		userData = m.config.Delegate.LocalState(join)
@@ -969,13 +1010,17 @@ func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	enc := codec.NewEncoder(bufConn, &hd)
 
 	// Begin state push
+	// 写入消息类型 pushPullMsg
 	if _, err := bufConn.Write([]byte{byte(pushPullMsg)}); err != nil {
 		return err
 	}
 
+	// 写入 header
 	if err := enc.Encode(&header); err != nil {
 		return err
 	}
+
+	// 依次写入node信息
 	for i := 0; i < header.Nodes; i++ {
 		if err := enc.Encode(&localNodes[i]); err != nil {
 			return err
@@ -983,6 +1028,7 @@ func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	}
 
 	// Write the user state as well
+	// 写入serf层的信息
 	if userData != nil {
 		if _, err := bufConn.Write(userData); err != nil {
 			return err
@@ -990,6 +1036,7 @@ func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	}
 
 	// Get the send buffer
+	// 获取发送缓冲区
 	return m.rawSendMsgStream(conn, bufConn.Bytes())
 }
 
@@ -1055,7 +1102,7 @@ func (m *Memberlist) decryptRemoteState(bufConn io.Reader) ([]byte, error) {
 
 // readStream is used to read from a stream connection, decrypting and
 // decompressing the stream if necessary.
-// 解析tcp conn请求数据  [类型][长度][value]
+// 解析tcp conn请求数据  [类型][value]
 func (m *Memberlist) readStream(conn net.Conn) (messageType, io.Reader, *codec.Decoder, error) {
 	// Created a buffered reader
 	var bufConn io.Reader = bufio.NewReader(conn)
@@ -1119,14 +1166,17 @@ func (m *Memberlist) readStream(conn net.Conn) (messageType, io.Reader, *codec.D
 }
 
 // readRemoteState is used to read the remote state from a connection
+// readRemoteState用于从连接中读取远程状态
 func (m *Memberlist) readRemoteState(bufConn io.Reader, dec *codec.Decoder) (bool, []pushNodeState, []byte, error) {
 	// Read the push/pull header
+	// 读取header
 	var header pushPullHeader
 	if err := dec.Decode(&header); err != nil {
 		return false, nil, nil, err
 	}
 
 	// Allocate space for the transfer
+	// nodes信息
 	remoteNodes := make([]pushNodeState, header.Nodes)
 
 	// Try to decode all the states
@@ -1137,6 +1187,7 @@ func (m *Memberlist) readRemoteState(bufConn io.Reader, dec *codec.Decoder) (boo
 	}
 
 	// Read the remote user state into a buffer
+	// 读取serf层的节点信息
 	var userBuf []byte
 	if header.UserStateLen > 0 {
 		userBuf = make([]byte, header.UserStateLen)
@@ -1153,6 +1204,7 @@ func (m *Memberlist) readRemoteState(bufConn io.Reader, dec *codec.Decoder) (boo
 
 	// For proto versions < 2, there is no port provided. Mask old
 	// behavior by using the configured port
+	// 对于原始版本< 2，没有提供端口。使用配置的端口屏蔽旧的行为
 	for idx := range remoteNodes {
 		if m.ProtocolVersion() < 2 || remoteNodes[idx].Port == 0 {
 			remoteNodes[idx].Port = uint16(m.config.BindPort)
@@ -1163,12 +1215,15 @@ func (m *Memberlist) readRemoteState(bufConn io.Reader, dec *codec.Decoder) (boo
 }
 
 // mergeRemoteState is used to merge the remote state with our local state
+// mergeRemoteState用于将远程状态与本地状态合并
 func (m *Memberlist) mergeRemoteState(join bool, remoteNodes []pushNodeState, userBuf []byte) error {
+	// 版本校验
 	if err := m.verifyProtocol(remoteNodes); err != nil {
 		return err
 	}
 
 	// Invoke the merge delegate if any
+	// 是否通知到serf层 可以控制是否取消合并
 	if join && m.config.Merge != nil {
 		nodes := make([]*Node, len(remoteNodes))
 		for idx, n := range remoteNodes {
@@ -1192,9 +1247,11 @@ func (m *Memberlist) mergeRemoteState(join bool, remoteNodes []pushNodeState, us
 	}
 
 	// Merge the membership state
+	// membership层合并nodes
 	m.mergeState(remoteNodes)
 
 	// Invoke the delegate for user state
+	// serf层合并nodes
 	if userBuf != nil && m.config.Delegate != nil {
 		m.config.Delegate.MergeRemoteState(userBuf, join)
 	}
@@ -1236,11 +1293,15 @@ func (m *Memberlist) readUserMsg(bufConn io.Reader, dec *codec.Decoder) error {
 // a ping, and waits for an ack. All of this is done as a series of blocking
 // operations, given the deadline. The bool return parameter is true if we
 // we able to round trip a ping to the other node.
+// sendPingAndWaitForAck建立到给定地址的tcp连接，发送ping，并等待ack。
+// 所有这些都是通过一系列的阻塞操作完成的，给定了最后期限。
+// 如果我们能够往返ping到另一个节点，bool返回参数为真。
 func (m *Memberlist) sendPingAndWaitForAck(a Address, ping ping, deadline time.Time) (bool, error) {
 	if a.Name == "" && m.config.RequireNodeNames {
 		return false, errNodeNamesAreRequired
 	}
 
+	// timeout是相对的超时时间
 	conn, err := m.transport.DialAddressTimeout(a, deadline.Sub(time.Now()))
 	if err != nil {
 		// If the node is actually dead we expect this to fail, so we
@@ -1250,7 +1311,7 @@ func (m *Memberlist) sendPingAndWaitForAck(a Address, ping ping, deadline time.T
 		return false, nil
 	}
 	defer conn.Close()
-	conn.SetDeadline(deadline)
+	conn.SetDeadline(deadline) // 绝对的超时时间
 
 	out, err := encode(pingMsg, &ping)
 	if err != nil {

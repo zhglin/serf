@@ -35,18 +35,18 @@ import (
 var errNodeNamesAreRequired = errors.New("memberlist: node names are required by configuration but one was not provided")
 
 type Memberlist struct {
-	sequenceNum uint32 // Local sequence number
+	sequenceNum uint32 // Local sequence number  // ping消息的序列号
 	incarnation uint32 // Local incarnation number	// 当前live节点的标识号 增加一个+1
 	numNodes    uint32 // Number of known nodes (estimate)	// 当前有多少个活跃节点
-	pushPullReq uint32 // Number of push/pull requests
+	pushPullReq uint32 // Number of push/pull requests		// tcp进行节点信息同步时的请求数
 
 	advertiseLock sync.RWMutex //advertise变更互斥锁
 	advertiseAddr net.IP       //advertise地址
 	advertisePort uint16       //advertise端口号
 
-	config     *Config // memberList配置
-	shutdown   int32   // Used as an atomic boolean value
-	shutdownCh chan struct{}
+	config     *Config       // memberList配置
+	shutdown   int32         // Used as an atomic boolean value
+	shutdownCh chan struct{} // memberlist 关闭的通知
 	// 当前节点是否已离开集群
 	leave          int32 // Used as an atomic boolean value
 	leaveBroadcast chan struct{}
@@ -66,14 +66,15 @@ type Memberlist struct {
 	nodeLock   sync.RWMutex          // node操作的读写锁
 	nodes      []*nodeState          // Known nodes							// 所有活跃节点
 	nodeMap    map[string]*nodeState // Maps Node.Name -> NodeState			// 所有活跃节点map
-	nodeTimers map[string]*suspicion // Maps Node.Name -> suspicion timer
+	nodeTimers map[string]*suspicion // Maps Node.Name -> suspicion timer   // suspect节点的定时器 目标nodeName=>suspicion
 	awareness  *awareness
 
 	tickerLock sync.Mutex
 	tickers    []*time.Ticker
 	stopTick   chan struct{}
-	probeIndex int
+	probeIndex int // 下一次进行节点探测的nodes的下标
 
+	// 异步的相应处理 Probe
 	ackLock     sync.Mutex
 	ackHandlers map[uint32]*ackHandler
 
@@ -94,6 +95,7 @@ func (conf *Config) BuildVsnArray() []uint8 {
 
 // newMemberlist creates the network listeners.
 // Does not schedule execution of background maintenance.
+// newMemberlist创建网络监听器。不安排后台维护的执行。
 // 创建memberList
 func newMemberlist(conf *Config) (*Memberlist, error) {
 	if conf.ProtocolVersion < ProtocolVersionMin {
@@ -235,6 +237,9 @@ func newMemberlist(conf *Config) (*Memberlist, error) {
 // all the listeners to allow other nodes to join this memberlist.
 // After creating a Memberlist, the configuration given should not be
 // modified by the user anymore.
+// Create将使用给定的配置创建一个新的Memberlist。
+// 这将不会连接到任何其他节点(参见Join)，但将启动所有侦听器，以允许其他节点加入这个成员列表。
+// 在创建Memberlist之后，用户不应该再修改给定的配置。
 // 创建memberList 打开tcp udp链接
 func Create(conf *Config) (*Memberlist, error) {
 	m, err := newMemberlist(conf)
@@ -445,7 +450,7 @@ func (m *Memberlist) setAlive() error {
 	}
 
 	// Set any metadata from the delegate.
-	// 校验tag
+	// 校验tag长度
 	var meta []byte
 	if m.config.Delegate != nil {
 		meta = m.config.Delegate.NodeMeta(MetaMaxSize)
@@ -454,6 +459,7 @@ func (m *Memberlist) setAlive() error {
 		}
 	}
 
+	// 设置为alive
 	a := alive{
 		Incarnation: m.nextIncarnation(),      // 编号
 		Node:        m.config.Name,            // 名称
@@ -712,10 +718,12 @@ func (m *Memberlist) GetHealthScore() int {
 
 // ProtocolVersion returns the protocol version currently in use by
 // this memberlist.
+// ProtocolVersion返回memberlist当前使用的协议版本。
 func (m *Memberlist) ProtocolVersion() uint8 {
 	// NOTE: This method exists so that in the future we can control
 	// any locking if necessary, if we change the protocol version at
 	// runtime, etc.
+	// 注意:这个方法的存在是为了在将来我们可以在必要的时候控制任何锁，如果我们在运行时改变协议版本，等等。
 	return m.config.ProtocolVersion
 }
 
@@ -748,6 +756,7 @@ func (m *Memberlist) Shutdown() error {
 	return nil
 }
 
+// 是否已关闭
 func (m *Memberlist) hasShutdown() bool {
 	return atomic.LoadInt32(&m.shutdown) == 1
 }
