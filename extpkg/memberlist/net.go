@@ -49,14 +49,14 @@ const (
 	ackRespMsg                         // ping的ack消息
 	suspectMsg                         // 可疑的dead消息
 	aliveMsg                           // alive消息
-	deadMsg
-	pushPullMsg // tcp节点同步
-	compoundMsg
-	userMsg // User mesg, not handled by us
-	compressMsg
-	encryptMsg
-	nackRespMsg // ping的nack消息
-	hasCrcMsg
+	deadMsg                            // dead消息
+	pushPullMsg                        // tcp节点同步
+	compoundMsg                        // 复合消息类型
+	userMsg                            // 用户层的消息标记 member层不处理 User mesg, not handled by us
+	compressMsg                        // 压缩类型
+	encryptMsg                         // 加密消息
+	nackRespMsg                        // ping的nack消息
+	hasCrcMsg                          // crc校验码的消息
 	errMsg
 )
 
@@ -68,10 +68,10 @@ const (
 )
 
 const (
-	MetaMaxSize            = 512 // Maximum size for node meta data
-	compoundHeaderOverhead = 2   // Assumed header overhead  复合类型的消息头占用的字节长度 2个unit8(类型+长度)
-	compoundOverhead       = 2   // Assumed overhead per entry in compoundHeader
-	userMsgOverhead        = 1
+	MetaMaxSize            = 512                   // Maximum size for node meta data
+	compoundHeaderOverhead = 2                     // Assumed header overhead  复合类型的消息头占用的字节长度 2个unit8(类型+长度)
+	compoundOverhead       = 2                     // Assumed overhead per entry in compoundHeader
+	userMsgOverhead        = 1                     // self层的消息进行打包发送时额外消耗的字节长度
 	blockingWarning        = 10 * time.Millisecond // Warn if a UDP packet takes this long to process
 	maxPushStateBytes      = 20 * 1024 * 1024
 	maxPushPullRequests    = 128 // Maximum number of concurrent push/pull requests
@@ -217,6 +217,7 @@ func (m *Memberlist) encryptionVersion() encryptionVersion {
 
 // streamListen is a long running goroutine that pulls incoming streams from the
 // transport and hands them off for processing.
+// streamListen是一个长时间运行的goroutine，它将传入的流从传输中提取出来，并将它们交给处理。
 // 处理已建立的tcp链接
 func (m *Memberlist) streamListen() {
 	for {
@@ -231,7 +232,7 @@ func (m *Memberlist) streamListen() {
 }
 
 // handleConn handles a single incoming stream connection from the transport.
-// 处理conn链接
+// 处理conn链接 tcp链接
 func (m *Memberlist) handleConn(conn net.Conn) {
 	defer conn.Close() // 数据接收完就关闭 conn
 	m.logger.Printf("[DEBUG] memberlist: Stream connection %s", LogConn(conn))
@@ -728,6 +729,7 @@ func (m *Memberlist) handleDead(buf []byte, from net.Addr) {
 }
 
 // handleUser is used to notify channels of incoming user data
+// 用户层消息
 func (m *Memberlist) handleUser(buf []byte, from net.Addr) {
 	d := m.config.Delegate
 	if d != nil {
@@ -736,6 +738,7 @@ func (m *Memberlist) handleUser(buf []byte, from net.Addr) {
 }
 
 // handleCompressed is used to unpack a compressed message
+// handleCompressed用于解压缩消息
 func (m *Memberlist) handleCompressed(buf []byte, from net.Addr, timestamp time.Time) {
 	// Try to decode the payload
 	payload, err := decompressPayload(buf)
@@ -749,6 +752,7 @@ func (m *Memberlist) handleCompressed(buf []byte, from net.Addr, timestamp time.
 }
 
 // encodeAndSendMsg is used to combine the encoding and sending steps
+// encodeAndSendMsg用于组合编码和发送步骤
 func (m *Memberlist) encodeAndSendMsg(a Address, msgType messageType, msg interface{}) error {
 	out, err := encode(msgType, msg)
 	if err != nil {
@@ -762,8 +766,10 @@ func (m *Memberlist) encodeAndSendMsg(a Address, msgType messageType, msg interf
 
 // sendMsg is used to send a message via packet to another host. It will
 // opportunistically create a compoundMsg and piggy back other broadcasts.
+// sendMsg用于通过数据包向另一个主机发送消息。它将有机会创建一个composdmsg并将其他广播连接起来。
 func (m *Memberlist) sendMsg(a Address, msg []byte) error {
 	// Check if we can piggy back any messages
+	// 计算消息剩余长度  获取其他报文
 	bytesAvail := m.config.UDPBufferSize - len(msg) - compoundHeaderOverhead
 	if m.config.EncryptionEnabled() && m.config.GossipVerifyOutgoing {
 		bytesAvail -= encryptOverhead(m.encryptionVersion())
@@ -771,16 +777,19 @@ func (m *Memberlist) sendMsg(a Address, msg []byte) error {
 	extra := m.getBroadcasts(compoundOverhead, bytesAvail)
 
 	// Fast path if nothing to piggypack
+	// 没有获取到 就只发一条消息
 	if len(extra) == 0 {
 		return m.rawSendMsgPacket(a, nil, msg)
 	}
 
 	// Join all the messages
+	// 合并新老消息
 	msgs := make([][]byte, 0, 1+len(extra))
 	msgs = append(msgs, msg)
 	msgs = append(msgs, extra...)
 
 	// Create a compound message
+	// 打包成compound消息
 	compound := makeCompoundMessage(msgs)
 
 	// Send the message
@@ -789,18 +798,22 @@ func (m *Memberlist) sendMsg(a Address, msg []byte) error {
 
 // rawSendMsgPacket is used to send message via packet to another host without
 // modification, other than compression or encryption if enabled.
+// rawSendMsgPacket用于通过数据包发送消息到另一个主机，不需要修改，如果启用了压缩或加密。
+// udp
 func (m *Memberlist) rawSendMsgPacket(a Address, node *Node, msg []byte) error {
 	if a.Name == "" && m.config.RequireNodeNames {
 		return errNodeNamesAreRequired
 	}
 
 	// Check if we have compression enabled
+	// 开启压缩
 	if m.config.EnableCompression {
 		buf, err := compressPayload(msg)
 		if err != nil {
 			m.logger.Printf("[WARN] memberlist: Failed to compress payload: %v", err)
 		} else {
 			// Only use compression if it reduced the size
+			// 只有当压缩缩小了尺寸时才使用压缩
 			if buf.Len() < len(msg) {
 				msg = buf.Bytes()
 			}
@@ -809,6 +822,7 @@ func (m *Memberlist) rawSendMsgPacket(a Address, node *Node, msg []byte) error {
 
 	// Try to look up the destination node. Note this will only work if the
 	// bare ip address is used as the node name, which is not guaranteed.
+	// 尝试查找目标节点。说明仅当使用裸ip地址作为节点名称时有效，不作保证。
 	if node == nil {
 		toAddr, _, err := net.SplitHostPort(a.Addr)
 		if err != nil {
@@ -825,15 +839,17 @@ func (m *Memberlist) rawSendMsgPacket(a Address, node *Node, msg []byte) error {
 
 	// Add a CRC to the end of the payload if the recipient understands
 	// ProtocolVersion >= 5
+	// 如果接收方理解协议版本>= 5，则在有效载荷的末尾添加CRC
 	if node != nil && node.PMax >= 5 {
 		crc := crc32.ChecksumIEEE(msg)
-		header := make([]byte, 5, 5+len(msg))
-		header[0] = byte(hasCrcMsg)
-		binary.BigEndian.PutUint32(header[1:], crc)
+		header := make([]byte, 5, 5+len(msg))       // 初始5个长度
+		header[0] = byte(hasCrcMsg)                 // 0写入类型
+		binary.BigEndian.PutUint32(header[1:], crc) // 剩下四个写校验码
 		msg = append(header, msg...)
 	}
 
 	// Check if we have encryption enabled
+	// 检查我们是否启用了加密  第一个字节没有type标识
 	if m.config.EncryptionEnabled() && m.config.GossipVerifyOutgoing {
 		// Encrypt the payload
 		var buf bytes.Buffer
@@ -855,6 +871,7 @@ func (m *Memberlist) rawSendMsgPacket(a Address, node *Node, msg []byte) error {
 // modification, other than applying compression and encryption if enabled.
 // 发送数据 对加密 压缩的消息类型单独处理
 // rawSendMsgStream用于在不修改的情况下将消息流发送到另一个主机，如果启用，则不应用压缩和加密。
+// tcp
 func (m *Memberlist) rawSendMsgStream(conn net.Conn, sendBuf []byte) error {
 	// Check if compression is enabled
 	if m.config.EnableCompression { // 压缩
@@ -995,7 +1012,7 @@ func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	m.nodeLock.RUnlock()
 
 	// Get the delegate state
-	// serf层的节点信息
+	// 用户层的节点信息
 	var userData []byte
 	if m.config.Delegate != nil {
 		userData = m.config.Delegate.LocalState(join)
@@ -1028,7 +1045,7 @@ func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	}
 
 	// Write the user state as well
-	// 写入serf层的信息
+	// 写入用户层的信息
 	if userData != nil {
 		if _, err := bufConn.Write(userData); err != nil {
 			return err
@@ -1187,7 +1204,7 @@ func (m *Memberlist) readRemoteState(bufConn io.Reader, dec *codec.Decoder) (boo
 	}
 
 	// Read the remote user state into a buffer
-	// 读取serf层的节点信息
+	// 读取用户层的节点信息
 	var userBuf []byte
 	if header.UserStateLen > 0 {
 		userBuf = make([]byte, header.UserStateLen)
@@ -1223,7 +1240,7 @@ func (m *Memberlist) mergeRemoteState(join bool, remoteNodes []pushNodeState, us
 	}
 
 	// Invoke the merge delegate if any
-	// 是否通知到serf层 可以控制是否取消合并
+	// 是否通知到用户层 可以控制是否取消合并
 	if join && m.config.Merge != nil {
 		nodes := make([]*Node, len(remoteNodes))
 		for idx, n := range remoteNodes {
@@ -1251,7 +1268,7 @@ func (m *Memberlist) mergeRemoteState(join bool, remoteNodes []pushNodeState, us
 	m.mergeState(remoteNodes)
 
 	// Invoke the delegate for user state
-	// serf层合并nodes
+	// 用户层合并nodes
 	if userBuf != nil && m.config.Delegate != nil {
 		m.config.Delegate.MergeRemoteState(userBuf, join)
 	}

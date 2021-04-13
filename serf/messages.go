@@ -17,12 +17,12 @@ const (
 	messageJoinType
 	messagePushPullType
 	messageUserEventType
-	messageQueryType
-	messageQueryResponseType
-	messageConflictResponseType
+	messageQueryType            // query消息
+	messageQueryResponseType    // query的响应
+	messageConflictResponseType // 名称冲突的响应 messageQueryResponseType里面包含messageConflictResponseType
 	messageKeyRequestType
 	messageKeyResponseType
-	messageRelayType
+	messageRelayType // 中继消息
 )
 
 const (
@@ -93,11 +93,13 @@ type messageQuery struct {
 }
 
 // Ack checks if the ack flag is set
+// 默认的messageQuery flags=0 m.Flags & queryFlagAck=0
 func (m *messageQuery) Ack() bool {
 	return (m.Flags & queryFlagAck) != 0
 }
 
 // NoBroadcast checks if the no broadcast flag is set
+// 默认的messageQuery flags=0 m.Flags & queryFlagNoBroadcast=0
 func (m *messageQuery) NoBroadcast() bool {
 	return (m.Flags & queryFlagNoBroadcast) != 0
 }
@@ -133,9 +135,10 @@ func decodeMessage(buf []byte, out interface{}) error {
 	return codec.NewDecoder(bytes.NewReader(buf), &handle).Decode(out)
 }
 
+// 用户层的报文编码
 func encodeMessage(t messageType, msg interface{}) ([]byte, error) {
 	buf := bytes.NewBuffer(nil)
-	buf.WriteByte(uint8(t))
+	buf.WriteByte(uint8(t)) // 第一个字节的报文类型
 
 	handle := codec.MsgpackHandle{}
 	encoder := codec.NewEncoder(buf, &handle)
@@ -151,6 +154,7 @@ type relayHeader struct {
 
 // encodeRelayMessage wraps a message in the messageRelayType, adding the length and
 // address of the end recipient to the front of the message
+// encodeRelayMessage将消息包装在messageRelayType中，将最终接收者的长度和地址添加到消息的前面
 func encodeRelayMessage(
 	t messageType,
 	addr net.UDPAddr,
@@ -163,6 +167,7 @@ func encodeRelayMessage(
 
 	buf.WriteByte(uint8(messageRelayType))
 
+	// 目的节点信息
 	err := encoder.Encode(relayHeader{
 		DestAddr: addr,
 		DestName: nodeName,
@@ -171,7 +176,7 @@ func encodeRelayMessage(
 		return nil, err
 	}
 
-	buf.WriteByte(uint8(t))
+	buf.WriteByte(uint8(t)) // 中继消息的类型
 	err = encoder.Encode(msg)
 	return buf.Bytes(), err
 }

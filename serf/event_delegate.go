@@ -8,6 +8,7 @@ type eventDelegate struct {
 	serf *Serf
 }
 
+// 用户层 添加节点
 func (e *eventDelegate) NotifyJoin(n *memberlist.Node) {
 	e.serf.handleNodeJoin(n)
 }

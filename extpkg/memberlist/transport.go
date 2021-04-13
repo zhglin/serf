@@ -31,6 +31,8 @@ type Transport interface {
 	// FinalAdvertiseAddr is given the user's configured values (which
 	// might be empty) and returns the desired IP and port to advertise to
 	// the rest of the cluster.
+	// FinalAdvertiseAddr得到用户配置的值(可能为空)，并返回所需的IP和端口，以便向集群的其余部分发布
+	// 返回广播地址
 	FinalAdvertiseAddr(ip string, port int) (net.IP, int, error)
 
 	// WriteTo is a packet-oriented interface that fires off the given
@@ -62,10 +64,13 @@ type Transport interface {
 	// StreamCh returns a channel that can be read to handle incoming stream
 	// connections from other peers. How this is set up for listening is
 	// left as an exercise for the concrete transport implementations.
+	// StreamCh返回一个通道，可以读取该通道来处理来自其他对等体的流连接。
+	// 如何设置侦听，留给具体的传输实现来实现。
 	StreamCh() <-chan net.Conn
 
 	// Shutdown is called when memberlist is shutting down; this gives the
 	// transport a chance to clean up any listeners.
+	// 当成员列表关闭时调用Shutdown;这使传输有机会清理任何侦听器。
 	Shutdown() error
 }
 

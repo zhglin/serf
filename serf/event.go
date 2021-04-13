@@ -98,6 +98,7 @@ func (u UserEvent) String() string {
 }
 
 // Query is the struct used by EventQuery type events
+// Query是EventQuery类型事件使用的结构
 type Query struct {
 	LTime   LamportTime
 	Name    string
@@ -108,7 +109,7 @@ type Query struct {
 	addr        []byte    // Address to respond to
 	port        uint16    // Port to respond to
 	sourceNode  string    // Node name to respond to
-	deadline    time.Time // Must respond by this deadline
+	deadline    time.Time // Must respond by this deadline  超时的绝对时间
 	relayFactor uint8     // Number of duplicate responses to relay back to sender
 	respLock    sync.Mutex
 }
@@ -126,17 +127,19 @@ func (q *Query) Deadline() time.Time {
 	return q.deadline
 }
 
+// 构建query的相应内容
 func (q *Query) createResponse(buf []byte) messageQueryResponse {
 	// Create response
 	return messageQueryResponse{
-		LTime:   q.LTime,
-		ID:      q.id,
+		LTime:   q.LTime, // 请求中的LTime
+		ID:      q.id,    // 请求中的Id
 		From:    q.serf.config.NodeName,
 		Payload: buf,
 	}
 }
 
 // Check response size
+// 校验响应内容长度
 func (q *Query) checkResponseSize(resp []byte) error {
 	if len(resp) > q.serf.config.QueryResponseSizeLimit {
 		return fmt.Errorf("response exceeds limit of %d bytes", q.serf.config.QueryResponseSizeLimit)
@@ -144,8 +147,9 @@ func (q *Query) checkResponseSize(resp []byte) error {
 	return nil
 }
 
+// 响应query信息
 func (q *Query) respondWithMessageAndResponse(raw []byte, resp messageQueryResponse) error {
-	// Check the size limit
+	// Check the size limit 长度限制
 	if err := q.checkResponseSize(raw); err != nil {
 		return err
 	}
@@ -154,16 +158,19 @@ func (q *Query) respondWithMessageAndResponse(raw []byte, resp messageQueryRespo
 	defer q.respLock.Unlock()
 
 	// Check if we've already responded
+	// 是否已经响应过
 	if q.deadline.IsZero() {
 		return fmt.Errorf("response already sent")
 	}
 
 	// Ensure we aren't past our response deadline
+	// 确保我们没有超过最后期限
 	if time.Now().After(q.deadline) {
 		return fmt.Errorf("response is past the deadline")
 	}
 
 	// Send the response directly to the originator
+	// 将响应直接发送给请求者
 	udpAddr := net.UDPAddr{IP: q.addr, Port: int(q.port)}
 
 	addr := memberlist.Address{
@@ -175,22 +182,26 @@ func (q *Query) respondWithMessageAndResponse(raw []byte, resp messageQueryRespo
 	}
 
 	// Relay the response through up to relayFactor other nodes
+	// 通过中继响应其他节点
 	if err := q.serf.relayResponse(q.relayFactor, udpAddr, q.sourceNode, &resp); err != nil {
 		return err
 	}
 
 	// Clear the deadline, responses sent
+	// 清除截止日期，标记已回复
 	q.deadline = time.Time{}
 
 	return nil
 }
 
 // Respond is used to send a response to the user query
+// response用于向用户query发送响应
 func (q *Query) Respond(buf []byte) error {
 	// Create response
+	// 响应内容
 	resp := q.createResponse(buf)
 
-	// Encode response
+	// Encode response 编码+类型
 	raw, err := encodeMessage(messageQueryResponseType, resp)
 	if err != nil {
 		return fmt.Errorf("failed to format response: %v", err)

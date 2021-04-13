@@ -42,6 +42,7 @@ func decode(buf []byte, out interface{}) error {
 }
 
 // Encode writes an encoded object to a new bytes buffer
+// Encode将已编码的对象写入新的字节缓冲区
 // 对响应数据进行编码
 func encode(msgType messageType, in interface{}) (*bytes.Buffer, error) {
 	buf := bytes.NewBuffer(nil)
@@ -172,23 +173,24 @@ OUTER:
 
 // makeCompoundMessage takes a list of messages and generates
 // a single compound message containing all of them
+// makeCompoundMessage接受一个消息列表，并生成一个包含所有消息的复合消息
+// [类型 1个字节][消息数 1个字节][每个消息长度 每个两字节][每个消息内容....]
 func makeCompoundMessage(msgs [][]byte) *bytes.Buffer {
 	// Create a local buffer
 	buf := bytes.NewBuffer(nil)
 
-	// Write out the type
+	// Write out the type  长度
 	buf.WriteByte(uint8(compoundMsg))
 
-	// Write out the number of message
+	// Write out the number of message  消息数量
 	buf.WriteByte(uint8(len(msgs)))
 
-	// Add the message lengths
-	// 添加两个字节的报文长度
+	// Add the message lengths  每个消息的长度 2个字节
 	for _, m := range msgs {
 		binary.Write(buf, binary.BigEndian, uint16(len(m)))
 	}
 
-	// Append the messages
+	// Append the messages  每个消息内容
 	for _, m := range msgs {
 		buf.Write(m)
 	}
@@ -199,21 +201,24 @@ func makeCompoundMessage(msgs [][]byte) *bytes.Buffer {
 // decodeCompoundMessage splits a compound message and returns
 // the slices of individual messages. Also returns the number
 // of truncated messages and any potential error
+// decodeCompoundMessage拆分复合消息并返回单个消息的片段。还返回截断消息的数量和任何潜在错误
 func decodeCompoundMessage(buf []byte) (trunc int, parts [][]byte, err error) {
 	if len(buf) < 1 {
 		err = fmt.Errorf("missing compound length byte")
 		return
 	}
-	numParts := uint8(buf[0])
+	numParts := uint8(buf[0]) // 代表这个复合消息里面有几个消息
 	buf = buf[1:]
 
 	// Check we have enough bytes
+	// 每个消息会额外使用两个字节记录长度
 	if len(buf) < int(numParts*2) {
 		err = fmt.Errorf("truncated len slice")
 		return
 	}
 
 	// Decode the lengths
+	// 每个消息的长度 每个消息使用两个字节记录长度
 	lengths := make([]uint16, numParts)
 	for i := 0; i < int(numParts); i++ {
 		lengths[i] = binary.BigEndian.Uint16(buf[i*2 : i*2+2])
@@ -222,12 +227,14 @@ func decodeCompoundMessage(buf []byte) (trunc int, parts [][]byte, err error) {
 
 	// Split each message
 	for idx, msgLen := range lengths {
+		// 长度不足 丢弃 trunc是丢弃的数量
 		if len(buf) < int(msgLen) {
 			trunc = int(numParts) - idx
 			return
 		}
 
 		// Extract the slice, seek past on the buffer
+		// 提取片，查找过去的缓冲区
 		slice := buf[:msgLen]
 		buf = buf[msgLen:]
 		parts = append(parts, slice)
@@ -263,6 +270,7 @@ func compressPayload(inp []byte) (*bytes.Buffer, error) {
 
 // decompressPayload is used to unpack an encoded compress{}
 // message and return its payload uncompressed
+// decompressPayload用于解压缩一个已编码的compress{}消息，并返回其未压缩的有效负载
 func decompressPayload(msg []byte) ([]byte, error) {
 	// Decode the message
 	var c compress

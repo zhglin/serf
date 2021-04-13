@@ -15,15 +15,17 @@ import (
 
 // QueryParam is provided to Query() to configure the parameters of the
 // query. If not provided, sane defaults will be used.
+// Query()提供了QueryParam来配置查询的参数。如果没有提供，将使用sane默认值。
 // query消息的参数
 type QueryParam struct {
 	// If provided, we restrict the nodes that should respond to those
 	// with names in this list
-	// 需要query的node名称
+	// 如果提供了，我们将限制应该响应具有此列表中的名称的节点
 	FilterNodes []string
 
 	// FilterTags maps a tag name to a regular expression that is applied
 	// to restrict the nodes that should respond
+	// FilterTags将标记名映射到一个正则表达式，该正则表达式应用于限制应该响应的节点
 	// 需要query的node tags
 	FilterTags map[string]string
 
@@ -31,30 +33,34 @@ type QueryParam struct {
 	// every node that meets the filter requirement. This means nodes
 	// the receive the message but do not pass the filters, will not
 	// send an ack.
+	// 如果为真，我们将从满足过滤器要求的每个节点请求交付确认。这意味着接收到消息但没有通过筛选器的节点将不会发送ack。
 	// 是否需要对方进行ack
 	RequestAck bool
 
 	// RelayFactor controls the number of duplicate responses to relay
 	// back to the sender through other nodes for redundancy.
+	// RelayFactor控制通过其他节点向发送者转发的重复响应的数量，以实现冗余。
 	RelayFactor uint8
 
 	// The timeout limits how long the query is left open. If not provided,
 	// then a default timeout is used based on the configuration of Serf
-	// 超时时间
+	// 超时限制查询打开的时间。如果没有提供，那么将根据Serf的配置使用默认超时
 	Timeout time.Duration
 }
 
 // DefaultQueryTimeout returns the default timeout value for a query
 // Computed as GossipInterval * QueryTimeoutMult * log(N+1)
+// DefaultQueryTimeout返回一个计算为GossipInterval * QueryTimeoutMult * log(N+1)的查询的默认超时值。
 func (s *Serf) DefaultQueryTimeout() time.Duration {
 	n := s.memberlist.NumMembers()
-	timeout := s.config.MemberlistConfig.GossipInterval
+	timeout := s.config.MemberlistConfig.GossipInterval // 定时广播的间隔时间
 	timeout *= time.Duration(s.config.QueryTimeoutMult)
 	timeout *= time.Duration(math.Ceil(math.Log10(float64(n + 1))))
 	return timeout
 }
 
 // DefaultQueryParam is used to return the default query parameters
+// DefaultQueryParam用于返回默认查询参数
 func (s *Serf) DefaultQueryParams() *QueryParam {
 	return &QueryParam{
 		FilterNodes: nil,
@@ -65,6 +71,7 @@ func (s *Serf) DefaultQueryParams() *QueryParam {
 }
 
 // encodeFilters is used to convert the filters into the wire format
+// encodeFilters用于将过滤器转换为传输格式
 func (q *QueryParam) encodeFilters() ([][]byte, error) {
 	var filters [][]byte
 
@@ -112,7 +119,7 @@ type QueryResponse struct {
 	respCh chan NodeResponse
 
 	// acks/responses are used to track the nodes that have sent an ack/response
-	acks      map[string]struct{} // 已经进行应答的nodes 只是去重用  key=>node.name
+	acks      map[string]struct{} // 已经进行ack的nodes 只是去重用  key=>node.name
 	responses map[string]struct{} // 回复消息的nodes 只是去重用  key=>node.name
 
 	closed    bool // 是否已关闭  超时关闭
@@ -140,6 +147,7 @@ func newQueryResponse(n int, q *messageQuery) *QueryResponse {
 
 // Close is used to close the query, which will close the underlying
 // channels and prevent further deliveries
+// Close用于关闭查询，这将关闭底层通道并防止进一步传递
 // 关闭此query
 func (r *QueryResponse) Close() {
 	r.closeLock.Lock()
@@ -179,6 +187,7 @@ func (r *QueryResponse) AckCh() <-chan string {
 
 // ResponseCh returns a channel that can be used to listen for responses.
 // Channel will be closed when the query is finished.
+// ResponseCh返回一个可以用来监听响应的通道。通道将在查询完成时关闭。
 func (r *QueryResponse) ResponseCh() <-chan NodeResponse {
 	return r.respCh
 }
@@ -209,6 +218,7 @@ type NodeResponse struct {
 
 // shouldProcessQuery checks if a query should be proceeded given
 // a set of filers.
+// shouldProcessQuery检查在给定一组过滤条件的情况下能否命中自身节点。
 func (s *Serf) shouldProcessQuery(filters [][]byte) bool {
 	for _, filter := range filters {
 		switch filterType(filter[0]) {
@@ -221,6 +231,7 @@ func (s *Serf) shouldProcessQuery(filters [][]byte) bool {
 			}
 
 			// Check if we are being targeted
+			// filterNode 是否匹配自身节点
 			found := false
 			for _, n := range nodes {
 				if n == s.config.NodeName {
@@ -241,6 +252,7 @@ func (s *Serf) shouldProcessQuery(filters [][]byte) bool {
 			}
 
 			// Check if we match this regex
+			// filterTag 是否能匹配自身节点的tag
 			tags := s.config.Tags
 			matched, err := regexp.MatchString(filt.Expr, tags[filt.Tag])
 			if err != nil {
@@ -261,10 +273,11 @@ func (s *Serf) shouldProcessQuery(filters [][]byte) bool {
 
 // relayResponse will relay a copy of the given response to up to relayFactor
 // other members.
+// relayResponse将把给定响应的副本转发给relayFactor个成员。
 func (s *Serf) relayResponse(
-	relayFactor uint8,
-	addr net.UDPAddr,
-	nodeName string,
+	relayFactor uint8, // 中继通知的节点数
+	addr net.UDPAddr, // 来源节点的addr
+	nodeName string, // 来源节点的nodeName
 	resp *messageQueryResponse,
 ) error {
 	if relayFactor == 0 {
@@ -274,6 +287,7 @@ func (s *Serf) relayResponse(
 	// Needs to be worth it; we need to have at least relayFactor *other*
 	// nodes. If you have a tiny cluster then the relayFactor shouldn't
 	// be needed.
+	// 如果集群节点数小于relayFactor个就直接退出了
 	members := s.Members()
 	if len(members) < int(relayFactor)+1 {
 		return nil
@@ -289,10 +303,13 @@ func (s *Serf) relayResponse(
 	}
 
 	// Relay to a random set of peers.
+	// 随机获取relayFactor个节点
 	localName := s.LocalMember().Name
 	relayMembers := kRandomMembers(int(relayFactor), members, func(m Member) bool {
 		return m.Status != StatusAlive || m.ProtocolMax < 5 || m.Name == localName
 	})
+
+	// 发送中继信息
 	for _, m := range relayMembers {
 		udpAddr := net.UDPAddr{IP: m.Addr, Port: int(m.Port)}
 		relayAddr := memberlist.Address{
@@ -308,6 +325,7 @@ func (s *Serf) relayResponse(
 
 // kRandomMembers selects up to k members from a given list, optionally
 // filtering by the given filterFunc
+// 随机获取k个满足filterFunc的节点
 func kRandomMembers(k int, members []Member, filterFunc func(Member) bool) []Member {
 	n := len(members)
 	kMembers := make([]Member, 0, k)

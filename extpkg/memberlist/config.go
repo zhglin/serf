@@ -74,6 +74,9 @@ type Config struct {
 	// higher the multiplier, the more likely a failed broadcast is to converge
 	// at the expense of increased bandwidth.
 	// udp消息的初始重试次数
+	// RetransmitMult是试图对通过八卦广播的消息进行重传次数的乘数。实际的重传次数用公式计算:
+	// Retransmits = RetransmitMult * log(N+1)
+	// 这使得重传可以根据集群大小适当地扩展。乘数越高，失败的广播就越有可能以增加的带宽为代价收敛。
 	RetransmitMult int
 
 	// SuspicionMult is the multiplier for determining the time an
@@ -166,7 +169,7 @@ type Config struct {
 
 	// GossipInterval and GossipNodes are used to configure the gossip
 	// behavior of memberlist.
-	// 用于配置成员列表的八卦行为。
+	// GossipInterval,GossipNodes 用于配置成员列表的八卦行为。
 	//
 	// GossipInterval is the interval between sending messages that need
 	// to be gossiped that haven't been able to piggyback on probing messages.
@@ -174,10 +177,16 @@ type Config struct {
 	// this value (more frequent) gossip messages are propagated across
 	// the cluster more quickly at the expense of increased bandwidth.
 	//
+	// GossipInterval是发送那些需要八卦但无法被探测到的消息之间的时间间隔。
+	// 如果该值设置为零，则禁用非附带八卦。通过降低这个值(更频繁地)，八卦消息在集群中传播得更快，但代价是增加了带宽。
+	//
 	// GossipNodes is the number of random nodes to send gossip messages to
 	// per GossipInterval. Increasing this number causes the gossip messages
 	// to propagate across the cluster more quickly at the expense of
 	// increased bandwidth.
+	//
+	// GossipNodes是每个八卦间隔发送八卦消息的随机节点的数量。
+	// 增加这个数字会使流言消息在集群中传播得更快，但代价是增加了带宽。
 	//
 	// GossipToTheDeadTime is the interval after which a node has died that
 	// we will still try to gossip to it. This gives it a chance to refute.
@@ -201,6 +210,8 @@ type Config struct {
 	// EnableCompression is used to control message compression. This can
 	// be used to reduce bandwidth usage at the cost of slightly more CPU
 	// utilization. This is only available starting at protocol version 1.
+	// EnableCompression用于控制消息压缩。
+	// 这可以用来减少带宽的使用，但代价是略微增加CPU的使用。这只能从协议版本1开始使用。
 	EnableCompression bool
 
 	// SecretKey is used to initialize the primary encryption key in a keyring.
@@ -224,21 +235,21 @@ type Config struct {
 	// for any custom messages that the delegate might do (broadcasts,
 	// local/remote state, etc.). If you don't set these, then the protocol
 	// versions will just be zero, and version compliance won't be done.
-	// memberlist的委托接口 处理gossip协议 serf层实现
+	// memberlist的委托接口 处理gossip协议 用户层实现
 	Delegate Delegate
-	// serf层的协议版本号
+	// 用户层的协议版本号
 	DelegateProtocolVersion uint8
-	// serf层支持的最小的协议版本号
+	// 用户层支持的最小的协议版本号
 	DelegateProtocolMin uint8
-	// serf层支持的最大的协议版本号
+	// 用户层层支持的最大的协议版本号
 	DelegateProtocolMax uint8
 
-	// serf层的事件处理回调
+	// 用户层的事件处理回调
 	Events   EventDelegate    // join,leave,update事件 conf.MemberlistConfig.Events = &eventDelegate{serf: serf}
 	Conflict ConflictDelegate // node名称冲突的事件回调  conf.MemberlistConfig.Conflict = &conflictDelegate{serf: serf}
 	Merge    MergeDelegate    // tcp进行节点同步的回调
 	Ping     PingDelegate     // ping消息回调 用于计算节点坐标  conf.MemberlistConfig.Ping = &pingDelegate{serf: serf}
-	Alive    AliveDelegate    // serf层设置的活跃节点的回调
+	Alive    AliveDelegate    // 用户层设置的活跃节点的回调
 
 	// DNSConfigPath points to the system's DNS config file, usually located
 	// at /etc/resolv.conf. It can be overridden via config for easier testing.

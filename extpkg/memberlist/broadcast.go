@@ -48,6 +48,7 @@ func (b *memberlistBroadcast) Finished() {
 
 // encodeAndBroadcast encodes a message and enqueues it for broadcast. Fails
 // silently if there is an encoding error.
+// encodeAndBroadcast对消息进行编码并将其排队以进行广播。如果存在编码错误，则静默失败。
 func (m *Memberlist) encodeAndBroadcast(node string, msgType messageType, msg interface{}) {
 	m.encodeBroadcastNotify(node, msgType, msg, nil)
 }
@@ -55,6 +56,7 @@ func (m *Memberlist) encodeAndBroadcast(node string, msgType messageType, msg in
 // encodeBroadcastNotify encodes a message and enqueues it for broadcast
 // and notifies the given channel when transmission is finished. Fails
 // silently if there is an encoding error.
+// encodeBroadcastNotify对消息进行编码，并将其排队广播，并在传输完成时通知给定的通道。如果存在编码错误，则静默失败。
 func (m *Memberlist) encodeBroadcastNotify(node string, msgType messageType, msg interface{}, notify chan struct{}) {
 	buf, err := encode(msgType, msg)
 	if err != nil {
@@ -67,6 +69,8 @@ func (m *Memberlist) encodeBroadcastNotify(node string, msgType messageType, msg
 // queueBroadcast is used to start dissemination of a message. It will be
 // sent up to a configured number of times. The message could potentially
 // be invalidated by a future message about the same node
+// queueBroadcast用于开始发布消息。
+// 它将被发送到一个配置的次数。该消息可能会被关于同一节点的未来消息作废
 func (m *Memberlist) queueBroadcast(node string, msg []byte, notify chan struct{}) {
 	b := &memberlistBroadcast{node, msg, notify}
 	m.broadcasts.QueueBroadcast(b)
@@ -75,28 +79,35 @@ func (m *Memberlist) queueBroadcast(node string, msg []byte, notify chan struct{
 // getBroadcasts is used to return a slice of broadcasts to send up to
 // a maximum byte size, while imposing a per-broadcast overhead. This is used
 // to fill a UDP packet with piggybacked data
+// getBroadcasts用于返回要发送的最大字节大小的广播片，同时强制每个广播的开销。这是用来填充一个UDP包与附带的数据
 func (m *Memberlist) getBroadcasts(overhead, limit int) [][]byte {
 	// Get memberlist messages first
+	// 获取成员列表消息
 	toSend := m.broadcasts.GetBroadcasts(overhead, limit)
 
 	// Check if the user has anything to broadcast
+	// 检查用户是否有任何东西要广播
 	d := m.config.Delegate
 	if d != nil {
 		// Determine the bytes used already
+		// 确定已经使用的字节数
 		bytesUsed := 0
 		for _, msg := range toSend {
 			bytesUsed += len(msg) + overhead
 		}
 
 		// Check space remaining for user messages
+		// 检查用户消息的剩余空间
+		// 需要额外消耗2个字节的长度+1个字节的类型
 		avail := limit - bytesUsed
 		if avail > overhead+userMsgOverhead {
 			userMsgs := d.GetBroadcasts(overhead+userMsgOverhead, avail)
 
 			// Frame each user message
+			// 将每个用户信息帧起来
 			for _, msg := range userMsgs {
 				buf := make([]byte, 1, len(msg)+1)
-				buf[0] = byte(userMsg)
+				buf[0] = byte(userMsg) // 增加userMsg标记
 				buf = append(buf, msg...)
 				toSend = append(toSend, buf)
 			}

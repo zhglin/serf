@@ -26,7 +26,7 @@ import (
 // These are the protocol versions that Serf can _understand_. These are
 // Serf-level protocol versions that are passed down as the delegate
 // version to memberlist below.
-// serf层支持的协议版本号
+// 用户层支持的协议版本号
 const (
 	ProtocolVersionMin uint8 = 2
 	ProtocolVersionMax       = 5
@@ -67,7 +67,7 @@ type Serf struct {
 	// in this struct due to Golang issue #599.
 	clock      LamportClock
 	eventClock LamportClock
-	queryClock LamportClock
+	queryClock LamportClock // query专用的 LamportClock
 
 	broadcasts    *memberlist.TransmitLimitedQueue
 	config        *Config
@@ -75,7 +75,7 @@ type Serf struct {
 	leftMembers   []*memberState
 	memberlist    *memberlist.Memberlist
 	memberLock    sync.RWMutex
-	members       map[string]*memberState // serf层的节点信息 name=>state
+	members       map[string]*memberState // 用户层的节点信息 name=>state
 
 	// recentIntents the lamport time and type of intent for a given node in
 	// case we get an intent before the relevant memberlist event. This is
@@ -92,9 +92,10 @@ type Serf struct {
 	// 需要进行广播的队列 传递到memberList层
 	queryBroadcasts *memberlist.TransmitLimitedQueue
 	// 历史query消息 用来判定是否过期消息
-	queryBuffer  []*queries
+	queryBuffer []*queries
+	// 基于快照重启时 快照中的queryTime
 	queryMinTime LamportTime
-	// query消息的请求以及响应 消息体的中lamportTime做为key，没有长度闲置，query超时会删除
+	// query消息的请求以及响应 消息体的中lamportTime做为key，没有长度限制，query超时会删除
 	queryResponse map[LamportTime]*QueryResponse
 	// 操作query的读写锁
 	queryLock sync.RWMutex
@@ -526,6 +527,10 @@ func (s *Serf) UserEvent(name string, payload []byte, coalesce bool) error {
 // and an error will be returned if the size limit is exceeded. This is only
 // available with protocol version 4 and newer. Query parameters are optional,
 // and if not provided, a sane set of defaults will be used.
+// Query用于广播一个新的查询。
+// 查询必须相当小，如果超过大小限制将返回错误。
+// 这只适用于协议版本4及更新版本。
+// 查询参数是可选的，如果不提供，将使用一组正常的默认值。
 // name是查询的类型 payLoad查询的内容
 func (s *Serf) Query(name string, payload []byte, params *QueryParam) (*QueryResponse, error) {
 	// Check that the latest protocol is in use
@@ -534,6 +539,7 @@ func (s *Serf) Query(name string, payload []byte, params *QueryParam) (*QueryRes
 	}
 
 	// Provide default parameters if none given
+	// 如果没有给出默认参数，则提供默认参数
 	if params == nil {
 		params = s.DefaultQueryParams()
 	} else if params.Timeout == 0 {
@@ -598,6 +604,7 @@ func (s *Serf) Query(name string, payload []byte, params *QueryParam) (*QueryRes
 
 // registerQueryResponse is used to setup the listeners for the query,
 // and to schedule closing the query after the timeout.
+// registerQueryResponse用于设置查询的监听器，并在超时后安排关闭查询。
 // 注册queryResponse 并设置超时关闭
 func (s *Serf) registerQueryResponse(timeout time.Duration, resp *QueryResponse) {
 	s.queryLock.Lock()
@@ -926,6 +933,7 @@ func (s *Serf) broadcast(t messageType, msg interface{}, notify chan<- struct{})
 
 // handleNodeJoin is called when a node join event is received
 // from memberlist.
+// 当从memberlist接收到节点连接事件时，handleNodeJoin被调用。
 func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 	s.memberLock.Lock()
 	defer s.memberLock.Unlock()
@@ -1299,10 +1307,10 @@ func (s *Serf) handleUserEvent(eventMsg *messageUserEvent) bool {
 
 // handleQuery is called when a query broadcast is
 // received. Returns if the message should be rebroadcast.
-// 对方 回复query消息 返回是否需要进行广播标记
+// 对方回复query消息 返回是否需要进行广播标记
 func (s *Serf) handleQuery(query *messageQuery) bool {
 	// Witness a potentially newer time
-	// 更新当前节点的lamportTime
+	// 收到消息后更新当前节点的lamportTime
 	s.queryClock.Witness(query.LTime)
 
 	// 加锁 顺序处理消息
@@ -1316,11 +1324,13 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	}
 
 	// Check if this message is too old
-	// 校验消息是否过期(太久)，len(s.queryBuffer)是缓存的curTime-LamportTime(len(s.queryBuffer)到LamportTime(len(s.queryBuffer)时间段的消息
+	// 校验消息是否过期(太久)，
+	// len(s.queryBuffer)是缓存的curTime-LamportTime(len(s.queryBuffer)到LamportTime(len(s.queryBuffer)时间段的消息
 	// 这个判断是校验query.LTime在缓存的时间之前
+	// queryCLock.Time是0开始的累加的int64类型，len(s.queryBuffer)是能缓存下来的历史的消息数量
 	curTime := s.queryClock.Time()
-	if curTime > LamportTime(len(s.queryBuffer)) &&
-		query.LTime < curTime-LamportTime(len(s.queryBuffer)) {
+	if curTime > LamportTime(len(s.queryBuffer)) && // 超过了所能缓存的条数
+		query.LTime < curTime-LamportTime(len(s.queryBuffer)) { // 小于最近能被缓存的lTime
 		s.logger.Printf(
 			"[WARN] serf: received old query %s from time %d (current: %d)",
 			query.Name,
@@ -1354,6 +1364,7 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	metrics.IncrCounter([]string{"serf", "queries", query.Name}, 1)
 
 	// Check if we should rebroadcast, this may be disabled by a flag
+	// 检查我们是否应该广播
 	rebroadcast := true
 	if query.NoBroadcast() {
 		rebroadcast = false
@@ -1364,10 +1375,12 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	if !s.shouldProcessQuery(query.Filters) {
 		// Even if we don't process it further, we should rebroadcast,
 		// since it is the first time we've seen this.
+		// 即使我们不进一步处理它，我们也应该重播，因为这是我们第一次看到它。
 		return rebroadcast
 	}
 
 	// Send ack if requested, without waiting for client to Respond()
+	// 只响应ack信息 具体的查询结果后续进行返回
 	if query.Ack() { // 需要ack 对query进行回复
 		// ack的固定响应内容
 		ack := messageQueryResponse{
@@ -1395,7 +1408,7 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 	}
 
 	// 收到messageQueryType的消息后写入chain
-	// 异步处理具体的query逻辑 internal_query
+	// 异步处理具体的query逻辑 internal_query.go newSerfQueries()
 	if s.config.EventCh != nil {
 		s.config.EventCh <- &Query{
 			LTime:       query.LTime,
@@ -1415,7 +1428,8 @@ func (s *Serf) handleQuery(query *messageQuery) bool {
 
 // handleResponse is called when a query response is
 // received.
-// 收到query消息的的回复
+// 查找相应的QueryResponse 收到query消息的的回复
+// handleQuery会回复两个消息  一条返回sourceNode 一条查询的结果
 func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 	// Look for a corresponding QueryResponse
 	s.queryLock.RLock()
@@ -1435,6 +1449,7 @@ func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 	}
 
 	// Check if the query is closed
+	// 检查查询是否关闭
 	if query.Finished() {
 		return
 	}
@@ -1473,6 +1488,9 @@ func (s *Serf) handleQueryResponse(resp *messageQueryResponse) {
 // handleNodeConflict is invoked when a join detects a conflict over a name.
 // This means two different nodes (IP/Port) are claiming the same name. Memberlist
 // will reject the "new" node mapping, but we can still be notified.
+// 当连接检测到关于名称的冲突时，将调用handleNodeConflict。
+// 这意味着两个不同的节点(IP/端口)使用相同的名称。
+// Memberlist将拒绝“new”节点映射，但我们仍然可以得到通知。
 // 处理node名称相同 ip、port不同导致的冲突事件
 func (s *Serf) handleNodeConflict(existing, other *memberlist.Node) {
 	// Log a basic warning if the node is not us...
@@ -1496,11 +1514,13 @@ func (s *Serf) handleNodeConflict(existing, other *memberlist.Node) {
 
 // resolveNodeConflict is used to determine which node should remain during
 // a name conflict. This is done by running an internal query.
+// resolveNodeConflict用于确定在名称冲突期间应该保留哪个节点。这是通过运行一个内部查询来实现的。
 func (s *Serf) resolveNodeConflict() {
 	// Get the local node
 	local := s.memberlist.LocalNode()
 
 	// Start a name resolution query
+	// 启动名称解析查询
 	qName := internalQueryName(conflictQuery)
 	payload := []byte(s.config.NodeName)
 	resp, err := s.Query(qName, payload, nil)
@@ -1515,7 +1535,7 @@ func (s *Serf) resolveNodeConflict() {
 	// Gather responses
 	respCh := resp.ResponseCh()
 	for r := range respCh {
-		// Decode the response
+		// Decode the response  解析查询的响应内容
 		if len(r.Payload) < 1 || messageType(r.Payload[0]) != messageConflictResponseType {
 			s.logger.Printf("[ERR] serf: Invalid conflict query response type: %v", r.Payload)
 			continue

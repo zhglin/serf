@@ -20,6 +20,7 @@ type TransmitLimitedQueue struct {
 
 	// RetransmitMult is the multiplier used to determine the maximum
 	// number of retransmissions attempted.
+	// 重传是用来确定试图重传的最大次数的乘法器。
 	RetransmitMult int
 
 	mu    sync.Mutex
@@ -190,11 +191,14 @@ func (q *TransmitLimitedQueue) lazyInit() {
 // queueBroadcast is like QueueBroadcast but you can use a nonzero value for
 // the initial transmit tier assigned to the message. This is meant to be used
 // for unit testing.
+// queueBroadcast与queueBroadcast类似，但您可以为分配给消息的初始传输层使用非零值。这是用于单元测试的。
+// 非零值表示已经重传的次数
 // 添加Broadcast
 func (q *TransmitLimitedQueue) queueBroadcast(b Broadcast, initialTransmits int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
+	// 初始化tq tm
 	q.lazyInit()
 
 	// 生成broadCast的id
@@ -389,7 +393,7 @@ func (q *TransmitLimitedQueue) GetBroadcasts(overhead, limit int) [][]byte {
 		toSend = append(toSend, msg)
 
 		// Check if we should stop transmission
-		// 校验keep的transmits是否超过限制，没超过就重新放入btree进行重试，serf层不做重试逻辑
+		// 校验keep的transmits是否超过限制，没超过就重新放入btree进行重试，用户层不做重试逻辑
 		// 对方收到重复报文根据LamportTime进行去重
 		q.deleteItem(keep)
 		if keep.transmits+1 >= transmitLimit {

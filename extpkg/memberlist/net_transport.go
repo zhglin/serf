@@ -129,10 +129,12 @@ func NewNetTransport(config *NetTransportConfig) (*NetTransport, error) {
 
 // GetAutoBindPort returns the bind port that was automatically given by the
 // kernel, if a bind port of 0 was given.
+// GetAutoBindPort返回由内核自动给出的绑定端口，如果绑定端口为0。
 // 获取tcp的监听端口
 func (t *NetTransport) GetAutoBindPort() int {
 	// We made sure there's at least one TCP listener, and that one's
 	// port was applied to all the others for the dynamic bind case.
+	// 我们确保至少有一个TCP侦听器，并且在动态绑定情况下，一个侦听器的端口应用于所有其他侦听器。
 	return t.tcpListeners[0].Addr().(*net.TCPAddr).Port
 }
 
@@ -141,14 +143,16 @@ func (t *NetTransport) GetAutoBindPort() int {
 func (t *NetTransport) FinalAdvertiseAddr(ip string, port int) (net.IP, int, error) {
 	var advertiseAddr net.IP
 	var advertisePort int
-	if ip != "" { // 已配置advertiseAddr
+	// 如果他们提供了一个地址，使用它。
+	if ip != "" {
 		// If they've supplied an address, use that.
 		advertiseAddr = net.ParseIP(ip)
-		if advertiseAddr == nil {
+		if advertiseAddr == nil { // 配置的不合法
 			return nil, 0, fmt.Errorf("Failed to parse advertise address %q", ip)
 		}
 
 		// Ensure IPv4 conversion if necessary.
+		// 必要时确保IPv4转换。
 		if ip4 := advertiseAddr.To4(); ip4 != nil {
 			advertiseAddr = ip4
 		}
@@ -158,6 +162,7 @@ func (t *NetTransport) FinalAdvertiseAddr(ip string, port int) (net.IP, int, err
 		if t.config.BindAddrs[0] == "0.0.0.0" {
 			// Otherwise, if we're not bound to a specific IP, let's
 			// use a suitable private IP address.
+			// 否则，如果我们没有绑定到特定的IP，那么让我们使用合适的私有IP地址。
 			var err error
 			// 从所有网卡中获取一个ip
 			ip, err = sockaddr.GetPrivateIP()
@@ -175,10 +180,12 @@ func (t *NetTransport) FinalAdvertiseAddr(ip string, port int) (net.IP, int, err
 		} else {
 			// Use the IP that we're bound to, based on the first
 			// TCP listener, which we already ensure is there.
+			// 使用我们绑定到的IP，基于我们已经确保存在的第一个TCP侦听器。
 			advertiseAddr = t.tcpListeners[0].Addr().(*net.TCPAddr).IP
 		}
 
 		// Use the port we are bound to.
+		// 使用我们已绑定到的端口。
 		advertisePort = t.GetAutoBindPort()
 	}
 
@@ -270,9 +277,11 @@ func (t *NetTransport) IngestStream(conn net.Conn) error {
 // 关闭transport
 func (t *NetTransport) Shutdown() error {
 	// This will avoid log spam about errors when we shut down.
+	// 这将避免在我们关闭时记录关于错误的垃圾信息。 先标记关闭 后面才会阻塞关闭链接
 	atomic.StoreInt32(&t.shutdown, 1)
 
 	// Rip through all the connections and shut them down.
+	// 关闭已经监听的链接
 	for _, conn := range t.tcpListeners {
 		conn.Close()
 	}
@@ -293,11 +302,15 @@ func (t *NetTransport) tcpListen(tcpLn *net.TCPListener) {
 	defer t.wg.Done()
 
 	// baseDelay is the initial delay after an AcceptTCP() error before attempting again
+	// baseDelay是AcceptTCP()错误后再次尝试之前的初始延迟
 	const baseDelay = 5 * time.Millisecond
 
 	// maxDelay is the maximum delay after an AcceptTCP() error before attempting again.
 	// In the case that tcpListen() is error-looping, it will delay the shutdown check.
 	// Therefore, changes to maxDelay may have an effect on the latency of shutdown.
+	// maxDelay是AcceptTCP()错误后再次尝试之前的最大延迟。
+	// 在tcpListen()是错误循环的情况下，它将延迟关闭检查。
+	// 因此，更改maxDelay可能会影响关闭延迟。
 	const maxDelay = 1 * time.Second
 
 	var loopDelay time.Duration
@@ -305,15 +318,15 @@ func (t *NetTransport) tcpListen(tcpLn *net.TCPListener) {
 		conn, err := tcpLn.AcceptTCP()
 		// 有异常 延迟重试
 		if err != nil {
-			// transport已关闭
+			// transport已关闭 之后退出
 			if s := atomic.LoadInt32(&t.shutdown); s == 1 {
 				break
 			}
 
-			if loopDelay == 0 {
+			if loopDelay == 0 { // 首次错误
 				loopDelay = baseDelay
 			} else {
-				loopDelay *= 2
+				loopDelay *= 2 // 再次错误
 			}
 
 			if loopDelay > maxDelay {

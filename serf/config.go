@@ -14,7 +14,7 @@ import (
 // our own protocol version.
 var ProtocolVersionMap map[uint8]uint8
 
-// serf层的协议版本号 对应的的memberlist层的协议版本号
+// 用户层的协议版本号 对应的的memberlist层的协议版本号
 func init() {
 	ProtocolVersionMap = map[uint8]uint8{
 		5: 2,
@@ -28,6 +28,7 @@ func init() {
 type Config struct {
 	// The name of this node. This must be unique in the cluster. If this
 	// is not set, Serf will set it to the hostname of the running machine.
+	// 此节点的名称。这在集群中必须是唯一的。如果没有设置，Serf将把它设置为运行机器的主机名。
 	NodeName string
 
 	// The tags for this role, if any. This is used to provide arbitrary
@@ -35,6 +36,9 @@ type Config struct {
 	// differentiate "load-balancer" from a "web" role as parts of the same cluster.
 	// Tags are deprecating 'Role', and instead it acts as a special key in this
 	// map.
+	// 这个角色的标记(如果有的话)。这用于为每个节点提供任意的键/值元数据。
+	// 例如，“role”标签可以用来区分“load-balancer”和“web”角色，它们是同一个集群的一部分。
+	// 标签正在弃用“Role”，取而代之的是它在这个映射中充当一个特殊的键。
 	Tags map[string]string
 
 	// EventCh is a channel that receives all the Serf events. The events
@@ -45,11 +49,14 @@ type Config struct {
 	// but point-in-time snapshots of members can still be retrieved by
 	// calling Members on Serf.
 	// Create(conf *Config)
+	// EventCh是一个接收所有Serf事件的通道。事件在这个通道上以正确的顺序发送。
+	// 必须注意这个通道不会阻塞，无论是通过足够快的处理事件还是缓冲通道，否则它会阻塞Serf自身的状态更新。
+	// 如果没有指定EventCh，则不会触发任何事件，但是仍然可以通过在Serf上调用成员来检索成员的时间点快照。
 	EventCh chan<- Event
 
 	// ProtocolVersion is the protocol version to speak. This must be between
 	// ProtocolVersionMin and ProtocolVersionMax.
-	// serf层当前使用的版本号
+	// 用户层当前使用的版本号
 	ProtocolVersion uint8
 
 	// BroadcastTimeout is the amount of time to wait for a broadcast
@@ -164,7 +171,9 @@ type Config struct {
 	// deliver queries older than the oldest entry in the buffer.
 	// Thus if a client is generating too many queries, it's possible that the
 	// buffer gets overrun and messages are not delivered.
-	// 缓存最近多少个LamportTime时长的查询记录，用来做过期消息的丢弃。如果客户机生成了太多的查询，可能会导致缓冲区溢出，从而无法传递消息
+	// QueryBuffer用于控制缓冲多少查询。这用于防止将查询重新交付给客户机。
+	// 缓冲区必须足够大，以处理所有“最近”事件，因为Serf不会交付比缓冲区中最老的条目更老的查询。
+	// 因此，如果客户机生成了太多的查询，可能会导致缓冲区溢出，从而无法传递消息。
 	QueryBuffer int
 
 	// QueryTimeoutMult configures the default timeout multipler for a query to run if no
@@ -177,6 +186,11 @@ type Config struct {
 	//
 	// Timeout = GossipInterval * QueryTimeoutMult * log(N+1)
 	//
+	// QueryTimeoutMult配置默认超时乘数，以便在没有提供特定值的情况下运行查询。
+	// 查询本质上是实时的，其中的答复是时间敏感的。因此，结果以异步方式收集，但是查询必须有一个有限的持续时间。
+	// 我们希望超时时间足够长，以便所有节点都有时间接收消息、运行处理程序并生成应答。
+	// 一旦超过了超时，任何进一步的响应都将被忽略。默认值为
+	// Timeout = GossipInterval * QueryTimeoutMult * log(N+1)
 	QueryTimeoutMult int
 
 	// QueryResponseSizeLimit and QuerySizeLimit limit the inbound and
@@ -184,6 +198,8 @@ type Config struct {
 	// in a UDP packet with some additional overhead, so tuning these
 	// past the default values of 1024 will depend on your network
 	// configuration.
+	// QueryResponseSizeLimit和QuerySizeLimit分别限制查询的入站和出站有效负载大小。
+	// 这些参数必须包含在带有额外开销的UDP数据包中，因此将这些参数调优为超过默认值1024将取决于您的网络配置。
 	QueryResponseSizeLimit int
 	// query消息的报文长度限制
 	QuerySizeLimit int
@@ -232,6 +248,11 @@ type Config struct {
 	// conflict and issues a special query which asks the cluster for the
 	// Name -> IP:Port mapping. If there is a simple majority of votes, that
 	// node stays while the other node will leave the cluster and exit.
+	// EnableNameConflictResolution控件，如果Serf将积极尝试解决名称冲突。
+	// 由于每个Serf成员必须有一个唯一的名称，如果多个节点声明相同的名称，集群可能会遇到问题。
+	// 在没有自动解析的情况下，Serf只是记录一些警告，而不采取任何行动。
+	// 自动解析检测冲突并发出一个特殊的查询，该查询要求集群提供Name -> IP:Port映射。
+	// 如果投票结果为简单多数，则该节点保留，而另一个节点将离开集群并退出。
 	EnableNameConflictResolution bool
 
 	// DisableCoordinates controls if Serf will maintain an estimate of this

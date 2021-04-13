@@ -110,12 +110,14 @@ func (m *Memberlist) schedule() {
 
 	// If we already have tickers, then don't do anything, since we're
 	// scheduled
+	// 如果我们已经准备好了，那就什么都不要做
 	if len(m.tickers) > 0 {
 		return
 	}
 
 	// Create the stop tick channel, a blocking channel. We close this
 	// when we should stop the tickers.
+	// 用来协调下面几个go协程的退出
 	stopCh := make(chan struct{})
 
 	// Create a new probeTicker
@@ -134,14 +136,16 @@ func (m *Memberlist) schedule() {
 	}
 
 	// Create a gossip ticker if needed
+	// 如果需要，创建一个八卦消息
 	if m.config.GossipInterval > 0 && m.config.GossipNodes > 0 {
-		t := time.NewTicker(m.config.GossipInterval)
+		t := time.NewTicker(m.config.GossipInterval) // 定时执行m.gossip
 		go m.triggerFunc(m.config.GossipInterval, t.C, stopCh, m.gossip)
 		m.tickers = append(m.tickers, t)
 	}
 
 	// If we made any tickers, then record the stopTick channel for
 	// later.
+	// 如果我们做了任何定时器，那么就记录下定时器的通道，供以后使用。
 	if len(m.tickers) > 0 {
 		m.stopTick = stopCh
 	}
@@ -204,20 +208,24 @@ func (m *Memberlist) pushPullTrigger(stop <-chan struct{}) {
 
 // Deschedule is used to stop the background maintenance. This is safe
 // to call multiple times.
+// desschedule命令用于停止schedule开启的go协程
 func (m *Memberlist) deschedule() {
 	m.tickerLock.Lock()
 	defer m.tickerLock.Unlock()
 
 	// If we have no tickers, then we aren't scheduled.
+	// 没有定时任务
 	if len(m.tickers) == 0 {
 		return
 	}
 
 	// Close the stop channel so all the ticker listeners stop.
+	// 关闭停止通道。
 	close(m.stopTick)
 
 	// Explicitly stop all the tickers themselves so they don't take
 	// up any more resources, and get rid of the list.
+	// 明确地停止所有的ticker，这样它们就不会占用更多的资源，并删除列表。
 	for _, t := range m.tickers {
 		t.Stop()
 	}
@@ -412,7 +420,7 @@ func (m *Memberlist) probeNode(node *nodeState) {
 	select {
 	case v := <-ackCh: // 在探测周期内响应
 		if v.Complete == true {
-			if m.config.Ping != nil { // serf层计算坐标
+			if m.config.Ping != nil { // 用户层计算坐标
 				rtt := v.Timestamp.Sub(sent)
 				m.config.Ping.NotifyPingComplete(&node.Node, rtt, v.Payload)
 			}
@@ -633,18 +641,20 @@ func (m *Memberlist) resetNodes() {
 
 // gossip is invoked every GossipInterval period to broadcast our gossip
 // messages to a few random nodes.
+// 每隔一段时间就会调用流言蜚语，向一些随机节点广播我们的流言消息。
 func (m *Memberlist) gossip() {
 	defer metrics.MeasureSince([]string{"memberlist", "gossip"}, time.Now())
 
 	// Get some random live, suspect, or recently dead nodes
+	// 随机选择m.config.GossipNodes个节点
 	m.nodeLock.RLock()
 	kNodes := kRandomNodes(m.config.GossipNodes, m.nodes, func(n *nodeState) bool {
-		if n.Name == m.config.Name {
+		if n.Name == m.config.Name { // 去除自身节点
 			return true
 		}
 
 		switch n.State {
-		case StateAlive, StateSuspect:
+		case StateAlive, StateSuspect: // 可疑的node也可以
 			return false
 
 		case StateDead:
@@ -657,13 +667,16 @@ func (m *Memberlist) gossip() {
 	m.nodeLock.RUnlock()
 
 	// Compute the bytes available
+	// compound报文
 	bytesAvail := m.config.UDPBufferSize - compoundHeaderOverhead
 	if m.config.EncryptionEnabled() {
-		bytesAvail -= encryptOverhead(m.encryptionVersion())
+		bytesAvail -= encryptOverhead(m.encryptionVersion()) // 加密需要的额外空间
 	}
 
+	// 每个节点发送的消息不同
 	for _, node := range kNodes {
 		// Get any pending broadcasts
+		// 获取需要广播的消息
 		msgs := m.getBroadcasts(compoundOverhead, bytesAvail)
 		if len(msgs) == 0 {
 			return
@@ -1032,7 +1045,7 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 	// that aliveMsg process, it'll cause us to re-join the cluster. This
 	// ensures that we don't.
 	// 在Leave()期间，可能已经有一个aliveMsg在队列中等待处理，但被上面的锁阻塞了。
-	// 如果我们让这个活的emsg进程，就会导致我们重新加入集群。这确保了我们不会。
+	// 如果我们让这个aliveMsg生效，就会导致我们重新加入集群。这确保了我们不会。
 	// 如果是当前节点 并且已leave 忽略
 	if m.hasLeft() && a.Node == m.config.Name {
 		return
@@ -1120,7 +1133,7 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 		// nodes did an append, failure detection bound would be
 		// very high.
 		// 获取一个随机偏移量。这对于确保故障检测范围平均较低是很重要的。
-		// 如果所有节点都执行了附加操作，那么故障检测范围将非常大。
+		// 如果所有节点都执行了append操作，那么故障检测范围将非常大。
 		// 随机插入 进行ping
 		n := len(m.nodes)
 		offset := randomOffset(n)
@@ -1256,7 +1269,7 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 	metrics.IncrCounter([]string{"memberlist", "msg", "alive"}, 1)
 
 	// Notify the delegate of any relevant updates
-	// serf层的事件回调
+	// 用户层的事件回调
 	if m.config.Events != nil {
 		if oldState == StateDead || oldState == StateLeft {
 			// if Dead/Left -> Alive, notify of join
@@ -1424,7 +1437,7 @@ func (m *Memberlist) deadNode(d *dead) {
 		}
 
 		// If we are leaving, we broadcast and wait
-		// 如果已经leaving，就广播然后等待
+		// 如果已经leaving，就广播然后等待  等待消息已经被网络发出
 		m.encodeBroadcastNotify(d.Node, deadMsg, d, m.leaveBroadcast)
 	} else {
 		// 非自身节点直接广播
@@ -1449,7 +1462,7 @@ func (m *Memberlist) deadNode(d *dead) {
 	state.StateChange = time.Now()
 
 	// Notify of death
-	// 通知serf层节点dead
+	// 通知用户层节点dead
 	if m.config.Events != nil {
 		m.config.Events.NotifyLeave(&state.Node)
 	}

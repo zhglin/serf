@@ -10,12 +10,14 @@ import (
 const (
 	// This is the prefix we use for queries that are internal to Serf.
 	// They are handled internally, and not forwarded to a client.
+	// 这是我们用于Serf内部查询的前缀。它们在内部处理，而不是转发给客户端。
 	InternalQueryPrefix = "_serf_" // query具体类型的前缀
 
 	// pingQuery is run to check for reachability
 	pingQuery = "ping"
 
 	// conflictQuery is run to resolve a name conflict
+	// 运行conflictQuery以解决名称冲突 _serf_conflict  名称冲突
 	conflictQuery = "conflict"
 
 	// installKeyQuery is used to install a new key
@@ -39,7 +41,7 @@ const (
 )
 
 // internalQueryName is used to generate a query name for an internal query
-// 构建query的类型
+// 构建query的类型 internalQueryName用于为内部查询生成查询名称
 func internalQueryName(name string) string {
 	return InternalQueryPrefix + name
 }
@@ -73,6 +75,9 @@ type nodeKeyResponse struct {
 // newSerfQueries is used to create a new serfQueries. We return an event
 // channel that is ingested and forwarded to an outCh. Any Queries that
 // have the InternalQueryPrefix are handled instead of forwarded.
+// newSerfQueries用于创建一个新的serfQueries。
+// 我们返回一个被摄取并转发给输出的事件通道。
+// 任何具有InternalQueryPrefix的查询都会被处理而不是转发。
 // 处理serf具体的query业务
 func newSerfQueries(serf *Serf, logger *log.Logger, outCh chan<- Event, shutdownCh <-chan struct{}) (chan<- Event, error) {
 	inCh := make(chan Event, 1024)
@@ -131,9 +136,11 @@ func (s *serfQueries) handleQuery(q *Query) {
 // handleConflict is invoked when we get a query that is attempting to
 // disambiguate a name conflict. They payload is a node name, and the response
 // should the address we believe that node is at, if any.
+// 当我们得到一个试图消除名称冲突歧义的查询时，将调用handlecconflict。
+// 它们的有效负载是一个节点名，响应应该是我们认为节点所在的地址(如果有的话)。
 func (s *serfQueries) handleConflict(q *Query) {
 	// The target node name is the payload
-	// 查询的名称
+	// 查询的名称 返回node列表中指定nodeName的信息
 	node := string(q.Payload)
 
 	// Do not respond to the query if it is about us
@@ -144,6 +151,7 @@ func (s *serfQueries) handleConflict(q *Query) {
 	s.logger.Printf("[DEBUG] serf: Got conflict resolution query for '%s'", node)
 
 	// Look for the member info
+	// 查找node信息 查不到响应nil
 	var out *Member
 	s.serf.memberLock.Lock()
 	if member, ok := s.serf.members[node]; ok {
@@ -152,6 +160,7 @@ func (s *serfQueries) handleConflict(q *Query) {
 	s.serf.memberLock.Unlock()
 
 	// Encode the response
+	// 编码类型
 	buf, err := encodeMessage(messageConflictResponseType, out)
 	if err != nil {
 		s.logger.Printf("[ERR] serf: Failed to encode conflict query response: %v", err)
@@ -159,6 +168,7 @@ func (s *serfQueries) handleConflict(q *Query) {
 	}
 
 	// Send our answer
+	// 发送响应
 	if err := q.Respond(buf); err != nil {
 		s.logger.Printf("[ERR] serf: Failed to respond to conflict query: %v", err)
 	}

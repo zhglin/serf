@@ -36,7 +36,7 @@ var errNodeNamesAreRequired = errors.New("memberlist: node names are required by
 
 type Memberlist struct {
 	sequenceNum uint32 // Local sequence number  // ping消息的序列号
-	incarnation uint32 // Local incarnation number	// 当前live节点的标识号 增加一个+1
+	incarnation uint32 // Local incarnation number	// 当前live节点的标识号 变更一次+1
 	numNodes    uint32 // Number of known nodes (estimate)	// 当前有多少个活跃节点
 	pushPullReq uint32 // Number of push/pull requests		// tcp进行节点信息同步时的请求数
 
@@ -45,8 +45,8 @@ type Memberlist struct {
 	advertisePort uint16       //advertise端口号
 
 	config     *Config       // memberList配置
-	shutdown   int32         // Used as an atomic boolean value
-	shutdownCh chan struct{} // memberlist 关闭的通知
+	shutdown   int32         // Used as an atomic boolean value 是否已经关闭
+	shutdownCh chan struct{} // memberlist 关闭的通知 终止对报文的处理
 	// 当前节点是否已离开集群
 	leave          int32 // Used as an atomic boolean value
 	leaveBroadcast chan struct{}
@@ -70,9 +70,9 @@ type Memberlist struct {
 	awareness  *awareness
 
 	tickerLock sync.Mutex
-	tickers    []*time.Ticker
-	stopTick   chan struct{}
-	probeIndex int // 下一次进行节点探测的nodes的下标
+	tickers    []*time.Ticker // schedule中开启的go定时任务数
+	stopTick   chan struct{}  // schedule中的终止信号
+	probeIndex int            // 下一次进行节点探测的nodes的下标
 
 	// 异步的相应处理 Probe
 	ackLock     sync.Mutex
@@ -221,6 +221,8 @@ func newMemberlist(conf *Config) (*Memberlist, error) {
 	// Get the final advertise address from the transport, which may need
 	// to see which address we bound to. We'll refresh this each time we
 	// send out an alive message.
+	// 从传输中获得最终的广播地址，这可能需要查看我们绑定到哪个地址。
+	// 我们每发送一条alive信息就刷新一次。
 	// 校验或者设置advertise地址
 	if _, _, err := m.refreshAdvertise(); err != nil {
 		return nil, err
@@ -424,11 +426,12 @@ func (m *Memberlist) resolveAddr(hostStr string) ([]ipPort, error) {
 // setAlive is used to mark this node as being alive. This is the same
 // as if we received an alive notification our own network channel for
 // ourself.
+// setAlive用于标记该节点为活着的。这与我们自己的网络频道接收到一个活的通知是一样的。
 // 设置当前节点是alive
 func (m *Memberlist) setAlive() error {
 	// Get the final advertise address from the transport, which may need
 	// to see which address we bound to.
-	// 获取node通信的ip port
+	// 获取node通信的ip port 每次setAlive变更一次
 	addr, port, err := m.refreshAdvertise()
 	if err != nil {
 		return err
@@ -562,6 +565,7 @@ func (m *Memberlist) SendTo(to net.Addr, msg []byte) error {
 	return m.SendToAddress(a, msg)
 }
 
+// 用户层发送指定节点的udp消息  需要额外增加消息类型
 func (m *Memberlist) SendToAddress(a Address, msg []byte) error {
 	// Encode as a user message
 	buf := make([]byte, 1, len(msg)+1)
@@ -626,7 +630,8 @@ func (m *Memberlist) Members() []*Node {
 // the time of calling this and calling Members, the number of alive nodes
 // may have changed, so this shouldn't be used to determine how many
 // members will be returned by Members.
-// 获取当前节点在当前时刻已知的存活节点数量
+// NumMembers返回当前已知的活动节点的数量。
+// 在调用此函数和调用成员之间，活动节点的数量可能发生了变化，因此不应该使用此函数来确定成员将返回多少成员。
 func (m *Memberlist) NumMembers() (alive int) {
 	m.nodeLock.RLock()
 	defer m.nodeLock.RUnlock()
@@ -734,6 +739,10 @@ func (m *Memberlist) ProtocolVersion() uint8 {
 // gracefully exit the cluster, call Leave prior to shutting down.
 //
 // This method is safe to call multiple times.
+// 关机将停止任何后台维护网络活动的这个成员名单，导致它出现“死亡”。
+// leave消息不会提前广播，因此被离开的集群必须使用探测来检测该节点的关闭。
+// 如果您希望更优雅地退出集群，请在关闭集群之前调用Leave。
+// 这个方法可以安全地多次调用。
 func (m *Memberlist) Shutdown() error {
 	m.shutdownLock.Lock()
 	defer m.shutdownLock.Unlock()
@@ -745,13 +754,14 @@ func (m *Memberlist) Shutdown() error {
 	// Shut down the transport first, which should block until it's
 	// completely torn down. If we kill the memberlist-side handlers
 	// those I/O handlers might get stuck.
+	// 先关闭运输系统，它会一直阻塞直到链接全部关闭。如果我们终止成员列表端处理程序，这些I/O处理程序可能会卡住。
 	if err := m.transport.Shutdown(); err != nil {
 		m.logger.Printf("[ERR] Failed to shutdown transport: %v", err)
 	}
 
 	// Now tear down everything else.
-	atomic.StoreInt32(&m.shutdown, 1)
-	close(m.shutdownCh)
+	atomic.StoreInt32(&m.shutdown, 1) // 标记关闭
+	close(m.shutdownCh)               // 终止相应的go协程
 	m.deschedule()
 	return nil
 }
