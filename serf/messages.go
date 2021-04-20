@@ -13,8 +13,8 @@ import (
 type messageType uint8
 
 const (
-	messageLeaveType messageType = iota
-	messageJoinType
+	messageLeaveType messageType = iota // serf层额leave事件类型 被handleNodeLeaveIntent处理 如果先memberList层收到leave事件 就记录在recentIntents中
+	messageJoinType                     // serf层额join事件类型 被handleNodeJoinIntent处理 如果先memberList层收到join事件 就记录在recentIntents中
 	messagePushPullType
 	messageUserEventType
 	messageQueryType            // query消息
@@ -55,7 +55,7 @@ type messageJoin struct {
 type messageLeave struct {
 	LTime LamportTime
 	Node  string
-	Prune bool
+	Prune bool // 是否强制leave
 }
 
 // messagePushPullType is used when doing a state exchange. This
@@ -135,7 +135,7 @@ func decodeMessage(buf []byte, out interface{}) error {
 	return codec.NewDecoder(bytes.NewReader(buf), &handle).Decode(out)
 }
 
-// 用户层的报文编码
+// serf层的报文编码
 func encodeMessage(t messageType, msg interface{}) ([]byte, error) {
 	buf := bytes.NewBuffer(nil)
 	buf.WriteByte(uint8(t)) // 第一个字节的报文类型

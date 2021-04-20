@@ -52,7 +52,7 @@ const (
 	deadMsg                            // dead消息
 	pushPullMsg                        // tcp节点同步
 	compoundMsg                        // 复合消息类型
-	userMsg                            // 用户层的消息标记 member层不处理 User mesg, not handled by us
+	userMsg                            // serf层的消息标记 member层不处理 User mesg, not handled by us
 	compressMsg                        // 压缩类型
 	encryptMsg                         // 加密消息
 	nackRespMsg                        // ping的nack消息
@@ -729,7 +729,7 @@ func (m *Memberlist) handleDead(buf []byte, from net.Addr) {
 }
 
 // handleUser is used to notify channels of incoming user data
-// 用户层消息
+// serf层消息
 func (m *Memberlist) handleUser(buf []byte, from net.Addr) {
 	d := m.config.Delegate
 	if d != nil {
@@ -1012,7 +1012,7 @@ func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	m.nodeLock.RUnlock()
 
 	// Get the delegate state
-	// 用户层的节点信息
+	// serf层的节点信息
 	var userData []byte
 	if m.config.Delegate != nil {
 		userData = m.config.Delegate.LocalState(join)
@@ -1045,7 +1045,7 @@ func (m *Memberlist) sendLocalState(conn net.Conn, join bool) error {
 	}
 
 	// Write the user state as well
-	// 写入用户层的信息
+	// 写入serf层的信息
 	if userData != nil {
 		if _, err := bufConn.Write(userData); err != nil {
 			return err
@@ -1204,7 +1204,7 @@ func (m *Memberlist) readRemoteState(bufConn io.Reader, dec *codec.Decoder) (boo
 	}
 
 	// Read the remote user state into a buffer
-	// 读取用户层的节点信息
+	// 读取serf层的节点信息
 	var userBuf []byte
 	if header.UserStateLen > 0 {
 		userBuf = make([]byte, header.UserStateLen)
@@ -1240,7 +1240,7 @@ func (m *Memberlist) mergeRemoteState(join bool, remoteNodes []pushNodeState, us
 	}
 
 	// Invoke the merge delegate if any
-	// 是否通知到用户层 可以控制是否取消合并
+	// 是否通知到serf层 可以控制是否取消合并
 	if join && m.config.Merge != nil {
 		nodes := make([]*Node, len(remoteNodes))
 		for idx, n := range remoteNodes {
@@ -1268,7 +1268,7 @@ func (m *Memberlist) mergeRemoteState(join bool, remoteNodes []pushNodeState, us
 	m.mergeState(remoteNodes)
 
 	// Invoke the delegate for user state
-	// 用户层合并nodes
+	// serf层合并nodes
 	if userBuf != nil && m.config.Delegate != nil {
 		m.config.Delegate.MergeRemoteState(userBuf, join)
 	}

@@ -235,21 +235,21 @@ type Config struct {
 	// for any custom messages that the delegate might do (broadcasts,
 	// local/remote state, etc.). If you don't set these, then the protocol
 	// versions will just be zero, and version compliance won't be done.
-	// memberlist的委托接口 处理gossip协议 用户层实现
+	// memberlist的委托接口 处理gossip协议 serf层实现
 	Delegate Delegate
-	// 用户层的协议版本号
+	// serf层的协议版本号
 	DelegateProtocolVersion uint8
-	// 用户层支持的最小的协议版本号
+	// serf层支持的最小的协议版本号
 	DelegateProtocolMin uint8
-	// 用户层层支持的最大的协议版本号
+	// serf层支持的最大的协议版本号
 	DelegateProtocolMax uint8
 
-	// 用户层的事件处理回调
+	// serf层的事件处理回调
 	Events   EventDelegate    // join,leave,update事件 conf.MemberlistConfig.Events = &eventDelegate{serf: serf}
 	Conflict ConflictDelegate // node名称冲突的事件回调  conf.MemberlistConfig.Conflict = &conflictDelegate{serf: serf}
 	Merge    MergeDelegate    // tcp进行节点同步的回调
 	Ping     PingDelegate     // ping消息回调 用于计算节点坐标  conf.MemberlistConfig.Ping = &pingDelegate{serf: serf}
-	Alive    AliveDelegate    // 用户层设置的活跃节点的回调
+	Alive    AliveDelegate    // serf层设置的活跃节点的回调
 
 	// DNSConfigPath points to the system's DNS config file, usually located
 	// at /etc/resolv.conf. It can be overridden via config for easier testing.

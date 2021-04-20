@@ -11,6 +11,7 @@ type EventDelegate interface {
 
 	// NotifyLeave is invoked when a node is detected to have left.
 	// The Node argument must not be modified.
+	// 当检测到一个节点已经离开时，将调用NotifyLeave。不能修改Node参数。
 	NotifyLeave(*Node)
 
 	// NotifyUpdate is invoked when a node is detected to have

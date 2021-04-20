@@ -17,9 +17,9 @@ type NodeStateType int
 
 const (
 	StateAlive   NodeStateType = iota
-	StateSuspect               // 可疑
-	StateDead
-	StateLeft
+	StateSuspect               // ping失败设置成可疑
+	StateDead                  // 各种ping失败就从可疑设置成dead
+	StateLeft                  // node的主动leave会设置成left, left的节点不参与gossip消息, 不会被ping。left不会变成dead，重新加入集群会变成alive
 )
 
 // Node represents a node in the cluster.
@@ -60,7 +60,7 @@ func (n *Node) String() string {
 // NodeState is used to manage our state view of another node
 type nodeState struct {
 	Node
-	Incarnation uint32        // Last known incarnation number
+	Incarnation uint32        // Last known incarnation number  只有alive,update,refute才会修改incarnation
 	State       NodeStateType // Current state						当前状态
 	StateChange time.Time     // Time last state change happened	状态变更时间
 }
@@ -122,6 +122,9 @@ func (m *Memberlist) schedule() {
 
 	// Create a new probeTicker
 	// 定时对节点进行节点探测
+	// 随机对alive以及未超时的dead节点进行ping (直接，间接，tcp)
+	// 如果在超时未收到响应就标记并广播Suspect信息
+	// 标记为Suspect的一段时间仍然没有收到信息，就降级为dead消息并进行广播，并传递到serf层
 	if m.config.ProbeInterval > 0 {
 		t := time.NewTicker(m.config.ProbeInterval)
 		// 定时不断执行m.probe
@@ -420,7 +423,7 @@ func (m *Memberlist) probeNode(node *nodeState) {
 	select {
 	case v := <-ackCh: // 在探测周期内响应
 		if v.Complete == true {
-			if m.config.Ping != nil { // 用户层计算坐标
+			if m.config.Ping != nil { // serf层计算坐标
 				rtt := v.Timestamp.Sub(sent)
 				m.config.Ping.NotifyPingComplete(&node.Node, rtt, v.Payload)
 			}
@@ -566,7 +569,7 @@ HANDLE_REMOTE_FAILURE:
 	// 没有收到任何ack，可能是对方节点的网络问题，把对方节点设置成suspect 不确定是不是节点不存在了
 	m.logger.Printf("[INFO] memberlist: Suspect %s has failed, no acks received", node.Name)
 	s := suspect{Incarnation: node.Incarnation, Node: node.Name, From: m.config.Name}
-	m.suspectNode(&s)
+	m.suspectNode(&s) // 这里会广播suspectMsg的消息
 }
 
 // Ping initiates a ping to the node with the specified name.
@@ -1269,7 +1272,7 @@ func (m *Memberlist) aliveNode(a *alive, notify chan struct{}, bootstrap bool) {
 	metrics.IncrCounter([]string{"memberlist", "msg", "alive"}, 1)
 
 	// Notify the delegate of any relevant updates
-	// 用户层的事件回调
+	// serf层的事件回调
 	if m.config.Events != nil {
 		if oldState == StateDead || oldState == StateLeft {
 			// if Dead/Left -> Alive, notify of join
@@ -1456,13 +1459,13 @@ func (m *Memberlist) deadNode(d *dead) {
 	// 如果dead消息是由节点本身发送的，则将其标记为left而不是dead。
 	if d.Node == d.From {
 		state.State = StateLeft
-	} else {
+	} else { // 别的节点通过ping广播的dead
 		state.State = StateDead
 	}
 	state.StateChange = time.Now()
 
 	// Notify of death
-	// 通知用户层节点dead
+	// 通知serf层节点dead
 	if m.config.Events != nil {
 		m.config.Events.NotifyLeave(&state.Node)
 	}

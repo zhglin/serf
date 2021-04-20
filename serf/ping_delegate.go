@@ -26,7 +26,7 @@ const (
 
 // AckPayload is called to produce a payload to send back in response to a ping
 // request.
-// 用户层 响应ping信息
+// serf层 响应ping信息
 func (p *pingDelegate) AckPayload() []byte {
 	var buf bytes.Buffer
 

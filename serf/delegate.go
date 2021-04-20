@@ -26,6 +26,7 @@ func (d *delegate) NodeMeta(limit int) []byte {
 	return roleBytes
 }
 
+// serf层的消息处理
 func (d *delegate) NotifyMsg(buf []byte) {
 	// If we didn't actually receive any data, then ignore it.
 	if len(buf) == 0 {
@@ -43,7 +44,7 @@ func (d *delegate) NotifyMsg(buf []byte) {
 	}
 
 	switch t {
-	case messageLeaveType:
+	case messageLeaveType: // serf层的下线
 		var leave messageLeave
 		if err := decodeMessage(buf[1:], &leave); err != nil {
 			d.serf.logger.Printf("[ERR] serf: Error decoding leave message: %s", err)
@@ -85,7 +86,7 @@ func (d *delegate) NotifyMsg(buf []byte) {
 		rebroadcast = d.serf.handleQuery(&query) // 需要进行广播
 		rebroadcastQueue = d.serf.queryBroadcasts
 
-	case messageQueryResponseType: // 接受query响应
+	case messageQueryResponseType: // 收到query响应
 		var resp messageQueryResponse
 		if err := decodeMessage(buf[1:], &resp); err != nil {
 			d.serf.logger.Printf("[ERR] serf: Error decoding query response message: %s", err)

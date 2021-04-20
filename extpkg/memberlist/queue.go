@@ -393,7 +393,7 @@ func (q *TransmitLimitedQueue) GetBroadcasts(overhead, limit int) [][]byte {
 		toSend = append(toSend, msg)
 
 		// Check if we should stop transmission
-		// 校验keep的transmits是否超过限制，没超过就重新放入btree进行重试，用户层不做重试逻辑
+		// 校验keep的transmits是否超过限制，没超过就重新放入btree进行重试，serf层不做重试逻辑
 		// 对方收到重复报文根据LamportTime进行去重
 		q.deleteItem(keep)
 		if keep.transmits+1 >= transmitLimit {
@@ -450,6 +450,7 @@ func (q *TransmitLimitedQueue) Reset() {
 
 // Prune will retain the maxRetain latest messages, and the rest
 // will be discarded. This can be used to prevent unbounded queue sizes
+// Prune将保留maxRetain最新消息，其余的将被丢弃。这可以用来防止无限制的队列大小
 func (q *TransmitLimitedQueue) Prune(maxRetain int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()

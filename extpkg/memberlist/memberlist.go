@@ -48,8 +48,8 @@ type Memberlist struct {
 	shutdown   int32         // Used as an atomic boolean value 是否已经关闭
 	shutdownCh chan struct{} // memberlist 关闭的通知 终止对报文的处理
 	// 当前节点是否已离开集群
-	leave          int32 // Used as an atomic boolean value
-	leaveBroadcast chan struct{}
+	leave          int32         // Used as an atomic boolean value
+	leaveBroadcast chan struct{} // leave消息完成广播后的通知
 
 	shutdownLock sync.Mutex // Serializes calls to Shutdown
 	leaveLock    sync.Mutex // Serializes calls to Leave
@@ -74,7 +74,7 @@ type Memberlist struct {
 	stopTick   chan struct{}  // schedule中的终止信号
 	probeIndex int            // 下一次进行节点探测的nodes的下标
 
-	// 异步的相应处理 Probe
+	// 异步的响应处理 Probe
 	ackLock     sync.Mutex
 	ackHandlers map[uint32]*ackHandler
 
@@ -265,10 +265,15 @@ func Create(conf *Config) (*Memberlist, error) {
 // This returns the number of hosts successfully contacted and an error if
 // none could be reached. If an error is returned, the node did not successfully
 // join the cluster.
+// Join用于获取一个现有的成员列表，并尝试通过联系所有给定的主机并执行状态同步来加入集群。
+// 最初，Memberlist只包含我们自己的状态，因此这样做将导致远程节点意识到这个节点的存在，从而有效地加入集群。
+// 这将返回成功联系的主机数量，如果没有连接到主机，则返回一个错误。
+// 如果返回错误，则说明该节点没有成功加入集群。
 func (m *Memberlist) Join(existing []string) (int, error) {
 	numSuccess := 0
 	var errs error
 	for _, exist := range existing {
+		// 解析网络ip nodeName
 		addrs, err := m.resolveAddr(exist)
 		if err != nil {
 			err = fmt.Errorf("Failed to resolve %s: %v", exist, err)
@@ -280,6 +285,7 @@ func (m *Memberlist) Join(existing []string) (int, error) {
 		for _, addr := range addrs {
 			hp := joinHostPort(addr.ip.String(), addr.port)
 			a := Address{Addr: hp, Name: addr.nodeName}
+			// 从对方节点拉取对方节点的node信息 放给自己
 			if err := m.pushPullNode(a, true); err != nil {
 				err = fmt.Errorf("Failed to join %s: %v", addr.ip, err)
 				errs = multierror.Append(errs, err)
@@ -565,7 +571,7 @@ func (m *Memberlist) SendTo(to net.Addr, msg []byte) error {
 	return m.SendToAddress(a, msg)
 }
 
-// 用户层发送指定节点的udp消息  需要额外增加消息类型
+// serf层发送指定节点的udp消息  需要额外增加消息类型
 func (m *Memberlist) SendToAddress(a Address, msg []byte) error {
 	// Encode as a user message
 	buf := make([]byte, 1, len(msg)+1)
@@ -655,15 +661,22 @@ func (m *Memberlist) NumMembers() (alive int) {
 //
 // This method is safe to call multiple times, but must not be called
 // after the cluster is already shut down.
+// Leave将广播一个Leave消息，但不会关闭后台监听器，这意味着节点将继续参与八卦和状态更新。
+// 这将阻塞，直到成功地将leave消息广播给集群的一个成员(如果存在的话)，或者直到达到指定的超时。
+// 多次调用此方法是安全的，但不能在集群已经关闭后调用。
+// serf层的退出 通知到memberList层
 func (m *Memberlist) Leave(timeout time.Duration) error {
 	m.leaveLock.Lock()
 	defer m.leaveLock.Unlock()
 
+	// 已经shutdown了
 	if m.hasShutdown() {
 		panic("leave after shutdown")
 	}
 
+	// 还没有left
 	if !m.hasLeft() {
+		// 标记leave
 		atomic.StoreInt32(&m.leave, 1)
 
 		m.nodeLock.Lock()
@@ -678,6 +691,9 @@ func (m *Memberlist) Leave(timeout time.Duration) error {
 		// same. This helps other nodes figure out that a node left
 		// intentionally. When Node equals From, other nodes know for
 		// sure this node is gone.
+		// 这个dead消息很特别，因为Node和From是相同的。
+		// 这有助于其他节点发现一个节点是故意留下的。
+		// 当Node等于From时，其他节点肯定知道这个节点消失了。
 		d := dead{
 			Incarnation: state.Incarnation,
 			Node:        state.Name,
@@ -686,6 +702,7 @@ func (m *Memberlist) Leave(timeout time.Duration) error {
 		m.deadNode(&d)
 
 		// Block until the broadcast goes out
+		// 阻塞到消息被广播出去
 		if m.anyAlive() {
 			var timeoutCh <-chan time.Time
 			if timeout > 0 {
@@ -771,6 +788,7 @@ func (m *Memberlist) hasShutdown() bool {
 	return atomic.LoadInt32(&m.shutdown) == 1
 }
 
+// 是否已离开集群
 func (m *Memberlist) hasLeft() bool {
 	return atomic.LoadInt32(&m.leave) == 1
 }

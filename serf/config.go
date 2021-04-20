@@ -14,7 +14,7 @@ import (
 // our own protocol version.
 var ProtocolVersionMap map[uint8]uint8
 
-// 用户层的协议版本号 对应的的memberlist层的协议版本号
+// serf层的协议版本号 对应的的memberlist层的协议版本号
 func init() {
 	ProtocolVersionMap = map[uint8]uint8{
 		5: 2,
@@ -52,17 +52,21 @@ type Config struct {
 	// EventCh是一个接收所有Serf事件的通道。事件在这个通道上以正确的顺序发送。
 	// 必须注意这个通道不会阻塞，无论是通过足够快的处理事件还是缓冲通道，否则它会阻塞Serf自身的状态更新。
 	// 如果没有指定EventCh，则不会触发任何事件，但是仍然可以通过在Serf上调用成员来检索成员的时间点快照。
+	// func Create(agentConf *Config, conf *serf.Config, logOutput io.Writer)
 	EventCh chan<- Event
 
 	// ProtocolVersion is the protocol version to speak. This must be between
 	// ProtocolVersionMin and ProtocolVersionMax.
-	// 用户层当前使用的版本号
+	// serf层当前使用的版本号
 	ProtocolVersion uint8
 
 	// BroadcastTimeout is the amount of time to wait for a broadcast
 	// message to be sent to the cluster. Broadcast messages are used for
 	// things like leave messages and force remove messages. If this is not
 	// set, a timeout of 5 seconds will be set.
+	// BroadcastTimeout是等待广播消息发送到集群的时间。
+	// 广播消息用于leave消息和force remove删除消息。
+	// 如果没有设置此参数，将设置一个5秒的超时。
 	BroadcastTimeout time.Duration
 
 	// LeavePropagateDelay is for our leave (node dead) message to propagate
@@ -70,6 +74,9 @@ type Config struct {
 	// service any probes from other nodes before they learn about us
 	// leaving and stop probing. Otherwise, we risk getting node failures as
 	// we leave.
+	// LeavePropagateDelay是为了让我们的leave(节点已死)消息在集群中传播。
+	// 特别是，我们想要保持足够长的时间，以便在其他节点知道我们离开并停止探测之前为它们提供服务。
+	// 否则，当我们离开时，我们将面临节点故障的风险。
 	LeavePropagateDelay time.Duration
 
 	// The settings below relate to Serf's event coalescence feature. Serf
@@ -117,6 +124,11 @@ type Config struct {
 	// TombstoneTimeout is the amount of time to keep around nodes
 	// that gracefully left as tombstones for syncing state with other
 	// Serf nodes.
+	// 下面的设置与Serf跟踪最近failed/left的节点并试图重新连接有关。
+	// ReapInterval是定时清理运行时的间隔。如果没有设置这个值(它是零)，它将被设置为一个合理的默认值。
+	// ReconnectInterval是尝试重新连接failed节点的时间间隔。如果没有设置这个值(它是零)，它将被设置为一个合理的默认值。
+	// ReconnectTimeout是尝试重新连接failed节点的时间，在放弃并认为它完全消失之前。
+	// TombstoneTimeout是保持作为left的节点与其他节点同步状态所需的时间。
 	ReapInterval      time.Duration
 	ReconnectInterval time.Duration
 	ReconnectTimeout  time.Duration
@@ -127,6 +139,8 @@ type Config struct {
 	// This should be set less than a typical reboot time, but large enough
 	// to see actual events, given our expected detection times for a failed
 	// node.
+	// FlapTimeout是指小于我们认为节点发生故障的时间，从遥测的角度来看，重新加入节点的时间看起来像一个皮瓣。
+	// 这一设置应该小于典型的重启时间，但是要大到可以看到实际事件，这是我们对失败节点的预期检测时间。
 	FlapTimeout time.Duration
 
 	// QueueCheckInterval is the interval at which we check the message
@@ -137,17 +151,22 @@ type Config struct {
 	// number of queued messages to broadcast exceeds this number. This
 	// is to provide the user feedback if events are being triggered
 	// faster than they can be disseminated
+	// QueueDepthWarning用于在要广播的队列消息数量超过此数量时生成警告消息。
+	// 这是为了在事件触发速度快于传播速度时提供用户反馈
 	QueueDepthWarning int
 
 	// MaxQueueDepth is used to start dropping messages if the number
 	// of queued messages to broadcast exceeds this number. This is to
 	// prevent an unbounded growth of memory utilization
+	// MaxQueueDepth用于在要广播的队列消息数量超过这个数量时开始丢弃消息。这是为了防止内存使用的无限制增长
 	MaxQueueDepth int
 
 	// MinQueueDepth, if >0 will enforce a lower limit for dropping messages
 	// and then the max will be max(MinQueueDepth, 2*SizeOfCluster). This
 	// defaults to 0 which disables this dynamic sizing feature. If this is
 	// >0 then MaxQueueDepth will be ignored.
+	// MinQueueDepth，如果>0将强制删除消息的下限，那么最大值将为max(MinQueueDepth, 2*SizeOfCluster)。
+	// 默认值为0，这将禁用这种动态大小调整特性。如果这是>0，那么MaxQueueDepth将被忽略。
 	MinQueueDepth int
 
 	// RecentIntentTimeout is used to determine how long we store recent
@@ -155,6 +174,10 @@ type Config struct {
 	// Serf broadcasts an intent that arrives before the Memberlist event.
 	// It is important that this not be too short to avoid continuous
 	// rebroadcasting of dead events.
+	// RecentIntentTimeout用于确定最近join和leave意图的存储时间。
+	// 这是用来防止Serf在Memberlist事件之前广播一个意图。
+	// 重要的是，不要太短，以避免连续重播dead事件。
+	// handleNodeLeaveIntent中如果不存在intent事件会记录并广播leave
 	RecentIntentTimeout time.Duration
 
 	// EventBuffer is used to control how many events are buffered.
@@ -288,6 +311,7 @@ type Config struct {
 
 	// ReconnectTimeoutOverride is an optional interface which when present allows
 	// the application to cause reaping of a node to happen when it otherwise wouldn't
+	// ReconnectTimeoutOverride是一个可选的接口，如果有这个接口，应用程序就可以允许覆盖各个成员的重新连接超时
 	ReconnectTimeoutOverride ReconnectTimeoutOverrider
 
 	// ValidateNodeNames controls whether nodenames only

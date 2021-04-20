@@ -4,7 +4,7 @@ import (
 	"github.com/hashicorp/serf/extpkg/memberlist"
 )
 
-// 用户层 node名称冲突的回调实现
+// serf层 node名称冲突的回调实现
 type conflictDelegate struct {
 	serf *Serf
 }

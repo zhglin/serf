@@ -26,7 +26,7 @@ import (
 // These are the protocol versions that Serf can _understand_. These are
 // Serf-level protocol versions that are passed down as the delegate
 // version to memberlist below.
-// 用户层支持的协议版本号
+// serf层支持的协议版本号
 const (
 	ProtocolVersionMin uint8 = 2
 	ProtocolVersionMax       = 5
@@ -53,6 +53,7 @@ func init() {
 
 // ReconnectTimeoutOverrider is an interface that can be implemented to allow overriding
 // the reconnect timeout for individual members.
+// ReconnectTimeoutOverrider是一个可以实现的接口，允许覆盖各个成员的重新连接超时。
 type ReconnectTimeoutOverrider interface {
 	ReconnectTimeout(member *Member, timeout time.Duration) time.Duration
 }
@@ -65,22 +66,25 @@ type ReconnectTimeoutOverrider interface {
 type Serf struct {
 	// The clocks for different purposes. These MUST be the first things
 	// in this struct due to Golang issue #599.
-	clock      LamportClock
+	clock      LamportClock // node操作专用的 LamportClock
 	eventClock LamportClock
 	queryClock LamportClock // query专用的 LamportClock
 
 	broadcasts    *memberlist.TransmitLimitedQueue
 	config        *Config
-	failedMembers []*memberState
-	leftMembers   []*memberState
-	memberlist    *memberlist.Memberlist
+	failedMembers []*memberState         // failed状态的member alive的节点收到memberlist的leave消息 变成failed
+	leftMembers   []*memberState         // left状态的member alive节点已经收到memberList以及serf的leave消息
+	memberlist    *memberlist.Memberlist // memberlist层
 	memberLock    sync.RWMutex
-	members       map[string]*memberState // 用户层的节点信息 name=>state
+	members       map[string]*memberState // serf层的节点信息 name=>state
 
 	// recentIntents the lamport time and type of intent for a given node in
 	// case we get an intent before the relevant memberlist event. This is
 	// indexed by node, and always store the latest lamport time / intent
 	// we've seen. The memberLock protects this structure.
+	// recentIntents指定节点的lamport时间和意图类型，以备在相关的memberlist事件之前获得意图。
+	// 这是按node索引的，并且总是存储我们看到的最新的lamport time / intent。memberLock保护这个结构。
+	// serf层对节点的上下线要晚于memberlist层的上下线，recentIntents是用来缓存serf层的node上下线记录的
 	recentIntents map[string]nodeIntent
 
 	eventBroadcasts *memberlist.TransmitLimitedQueue
@@ -161,11 +165,13 @@ type Member struct {
 // MemberStatus is the state that a member is in.
 type MemberStatus int
 
+// alive收到memberList的leave事件更新成statusFailed 再收到serf的leave事件变更成statusLeft
+// alive收到serf的leave事件更新成statusLeaving 再收到memberList的leave事件变更成statusLeft
 const (
-	StatusNone MemberStatus = iota
-	StatusAlive
-	StatusLeaving
-	StatusLeft
+	StatusNone    MemberStatus = iota
+	StatusAlive                //存活
+	StatusLeaving              //离线
+	StatusLeft                 //下线
 	StatusFailed
 )
 
@@ -192,17 +198,20 @@ func (s MemberStatus) String() string {
 type memberState struct {
 	Member
 	statusLTime LamportTime // lamport clock time of last received message
-	leaveTime   time.Time   // wall clock time of leave
+	leaveTime   time.Time   // wall clock time of leave leave的当前时间 memberList层的leave消息
 }
 
 // nodeIntent is used to buffer intents for out-of-order deliveries.
+// nodeIntent用于缓冲乱序交付的意图。serf先与memberList
 type nodeIntent struct {
 	// Type is the intent being tracked. Only messageJoinType and
 	// messageLeaveType are tracked.
+	// 消息类型  只记录Join，leave类型
 	Type messageType
 
 	// WallTime is the wall clock time we saw this intent in order to
 	// expire it from the buffer.
+	// 收到消息并记录的当前时间
 	WallTime time.Time
 
 	// LTime is the Lamport time, used for cluster-wide ordering of events.
@@ -427,8 +436,8 @@ func Create(conf *Config) (*Serf, error) {
 
 	// Start the background tasks. See the documentation above each method
 	// for more information on their role.
-	go serf.handleReap()
-	go serf.handleReconnect()
+	go serf.handleReap()      // 清理left，failed节点 以及recentIntents
+	go serf.handleReconnect() // 对failedMembers进行重新连接
 	go serf.checkQueueDepth("Intent", serf.broadcasts)
 	go serf.checkQueueDepth("Event", serf.eventBroadcasts)
 	go serf.checkQueueDepth("Query", serf.queryBroadcasts)
@@ -682,6 +691,9 @@ func (s *Serf) Join(existing []string, ignoreOld bool) (int, error) {
 // given clock value. It is used on either join, or if
 // we need to refute an older leave intent. Cannot be called
 // with the memberLock held.
+// broadcastJoin用一个给定的时钟值广播一个新的join意图。
+// 它可以用于连接，也可以用于需要驳倒旧的leave意图。
+// 不能在持有memberLock的情况下调用。
 func (s *Serf) broadcastJoin(ltime LamportTime) error {
 	// Construct message to update our lamport clock
 	msg := messageJoin{
@@ -703,6 +715,8 @@ func (s *Serf) broadcastJoin(ltime LamportTime) error {
 
 // Leave gracefully exits the cluster. It is safe to call this multiple
 // times.
+// Leave优雅退出集群。多次调用这个函数是安全的。
+// memberlist被标记为left状态 不会变更成dead 等待下次alive
 func (s *Serf) Leave() error {
 	// Check the current state
 	s.stateLock.Lock()
@@ -736,6 +750,7 @@ func (s *Serf) Leave() error {
 
 	// Only broadcast the leave message if there is at least one
 	// other node alive.
+	// 只有在至少有一个其他节点处于活动状态时才广播leave消息。
 	if s.hasAliveMembers() {
 		notifyCh := make(chan struct{})
 		if err := s.broadcast(messageLeaveType, &msg, notifyCh); err != nil {
@@ -750,6 +765,7 @@ func (s *Serf) Leave() error {
 	}
 
 	// Attempt the memberlist leave
+	// 通知memberlist层退出   传递的是超时时间
 	err := s.memberlist.Leave(s.config.BroadcastTimeout)
 	if err != nil {
 		return err
@@ -760,9 +776,13 @@ func (s *Serf) Leave() error {
 	// queue, but this wait is for that message to propagate through the
 	// cluster. In particular, we want to stay up long enough to service
 	// any probes from other nodes before they learn about us leaving.
+	// 等待leave消息在集群中广播。
+	// 广播超时是我们等待消息从我们自己的队列传出的时间，但这个等待是为了让消息通过集群传播。
+	// 特别是，我们想要保持足够长的时间，以便在其他节点知道我们离开之前为它们提供服务。
 	time.Sleep(s.config.LeavePropagateDelay)
 
 	// Transition to Left only if we not already shutdown
+	// 只有在我们还没有关闭的情况下才会切换到left
 	s.stateLock.Lock()
 	if s.state != SerfShutdown {
 		s.state = SerfLeft
@@ -773,6 +793,7 @@ func (s *Serf) Leave() error {
 
 // hasAliveMembers is called to check for any alive members other than
 // ourself.
+// hasalivembers被调用来检查除我们之外的任何活着的成员。
 func (s *Serf) hasAliveMembers() bool {
 	s.memberLock.RLock()
 	defer s.memberLock.RUnlock()
@@ -826,6 +847,8 @@ func (s *Serf) RemoveFailedNodePrune(node string) error {
 // immediately, instead of waiting for the reaper to eventually reclaim it.
 // This also has the effect that Serf will no longer attempt to reconnect
 // to this node.
+// ForceLeave立即强制从集群中移除一个失败的节点，而不是等待死神最终回收它。
+// 这也会导致Serf不再尝试重新连接到这个节点。
 func (s *Serf) forceLeave(node string, prune bool) error {
 	// Construct the message to broadcast
 	msg := messageLeave{
@@ -918,6 +941,8 @@ func (s *Serf) State() SerfState {
 // broadcast takes a Serf message type, encodes it for the wire, and queues
 // the broadcast. If a notify channel is given, this channel will be closed
 // when the broadcast is sent.
+// broadcast接受一个serf层消息类型，对其进行编码，并将广播排队。
+// 如果给出了一个通知通道，那么这个通道将在广播发送时关闭。
 func (s *Serf) broadcast(t messageType, msg interface{}, notify chan<- struct{}) error {
 	raw, err := encodeMessage(t, msg)
 	if err != nil {
@@ -943,11 +968,12 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 		return
 	}
 
-	var oldStatus MemberStatus
+	var oldStatus MemberStatus // 旧状态
 	member, ok := s.members[n.Name]
+	// 不存在
 	if !ok {
 		oldStatus = StatusNone
-		member = &memberState{
+		member = &memberState{ // 创建新节点
 			Member: Member{
 				Name:   n.Name,
 				Addr:   net.IP(n.Addr),
@@ -960,9 +986,14 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 		// Check if we have a join or leave intent. The intent buffer
 		// will only hold one event for this node, so the more recent
 		// one will take effect.
+		// serf层先收到了此节点的join或者leave消息 那么就要以serf层的事件为准
+		// 检查是否有join或leave意图。这个节点的意图缓冲区将只保存一个事件，所以最近的那个将生效。
+		// 不存在的话要检查有没有serf层的上下线事件 因为只有memberList的节点变更成功 才会在serf层生效
 		if join, ok := recentIntent(s.recentIntents, n.Name, messageJoinType); ok {
 			member.statusLTime = join
 		}
+
+		// 如果有个serf层的下线事件 就直接记录成下线
 		if leave, ok := recentIntent(s.recentIntents, n.Name, messageLeaveType); ok {
 			member.Status = StatusLeaving
 			member.statusLTime = leave
@@ -977,7 +1008,7 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 		}
 
 		member.Status = StatusAlive
-		member.leaveTime = time.Time{}
+		member.leaveTime = time.Time{} // 重置leaveTime
 		member.Addr = net.IP(n.Addr)
 		member.Port = n.Port
 		member.Tags = s.decodeTags(n.Meta)
@@ -993,6 +1024,7 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 
 	// If node was previously in a failed state, then clean up some
 	// internal accounting.
+	// 如果node以前处于失败状态，则清除一些内部核算。
 	// TODO(mitchellh): needs tests to verify not reaped
 	if oldStatus == StatusFailed || oldStatus == StatusLeft {
 		s.failedMembers = removeOldMember(s.failedMembers, member.Name)
@@ -1015,6 +1047,9 @@ func (s *Serf) handleNodeJoin(n *memberlist.Node) {
 
 // handleNodeLeave is called when a node leave event is received
 // from memberlist.
+// memberList层的leave事件处理
+// StatusLeaving=>StatusLeft StatusAlive=>StatusFailed
+// memberList可能会根据ping消息 把节点设置成leave状态 但是serf没有广播leave
 func (s *Serf) handleNodeLeave(n *memberlist.Node) {
 	s.memberLock.Lock()
 	defer s.memberLock.Unlock()
@@ -1023,15 +1058,16 @@ func (s *Serf) handleNodeLeave(n *memberlist.Node) {
 	if !ok {
 		// We've never even heard of this node that is supposedly
 		// leaving. Just ignore it completely.
+		// 我们甚至从未听说过这个应该离开的节点。完全忽略它。
 		return
 	}
 
 	switch member.Status {
-	case StatusLeaving:
+	case StatusLeaving: // serf层已处理这个leave消息
 		member.Status = StatusLeft
 		member.leaveTime = time.Now()
 		s.leftMembers = append(s.leftMembers, member)
-	case StatusAlive:
+	case StatusAlive: // 说明serf层还没有处理这个leave消息
 		member.Status = StatusFailed
 		member.leaveTime = time.Now()
 		s.failedMembers = append(s.failedMembers, member)
@@ -1107,6 +1143,7 @@ func (s *Serf) handleNodeUpdate(n *memberlist.Node) {
 }
 
 // handleNodeLeaveIntent is called when an intent to leave is received.
+// serf层的下线处理
 func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 
 	// Witness a potentially newer time
@@ -1118,16 +1155,19 @@ func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 	member, ok := s.members[leaveMsg.Node]
 	if !ok {
 		// Rebroadcast only if this was an update we hadn't seen before.
+		// 只有我们之前没见过的更新才会重播。serf层没这个下线节点
 		return upsertIntent(s.recentIntents, leaveMsg.Node, messageLeaveType, leaveMsg.LTime, time.Now)
 	}
 
 	// If the message is old, then it is irrelevant and we can skip it
+	// 如果信息是旧的，那么它是不相关的，我们可以跳过它
 	if leaveMsg.LTime <= member.statusLTime {
 		return false
 	}
 
 	// Refute us leaving if we are in the alive state
 	// Must be done in another goroutine since we have the memberLock
+	// 如果我们处于活着的状态，重新广播join消息
 	if leaveMsg.Node == s.config.NodeName && s.state == SerfAlive {
 		s.logger.Printf("[DEBUG] serf: Refuting an older leave intent")
 		go s.broadcastJoin(s.clock.Time())
@@ -1138,7 +1178,7 @@ func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 	// (despite the variable naming implying otherwise).
 	//
 	// By updating this statusLTime here we ensure that the earlier conditional
-	// on "leaveMsg.LTime <= member.statusLTime" will prevent an infinite
+	// on "c" will prevent an infinite
 	// rebroadcast when seeing two successive leave message for the same
 	// member. Without this fix a leave message that arrives after a member is
 	// already marked as leaving/left will cause it to be rebroadcast without
@@ -1149,9 +1189,17 @@ func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 	// This eventually leads to overflowing serf intent queues
 	// - https://github.com/hashicorp/consul/issues/8179
 	// - https://github.com/hashicorp/consul/issues/7960
+	// 即使status状态没有改变(尽管变量命名暗示相反)，也要始终更新lamportTime。
+	// 通过在这里更新这个statusLTime，我们可以确保前面的条件"leaveMsg.LTime <= member.statusLTime"。
+	// 当看到同一个成员连续两条leave消息时，statusLTime将防止无限重广播。
+	// 如果没有这个修复，在一个成员已经被标记为leaving/left之后到达的leave消息将导致它被重新广播，而不将其标记为本地目的地。
+	// 如果集群中有多个serf实例经历了这一系列事件，那么它们将无限期地相互广播有关受影响节点的消息。这最终会导致serf意图队列溢出
 	member.statusLTime = leaveMsg.LTime
 
 	// State transition depends on current state
+	// memberList层的状态变更 StatusAlive=>StatusFailed StatusLeaving=>StatusLeft
+	// 这里是                StatusAlive=>StatusLeaving StatusFailed=>StatusLeft
+	// 不管是先处理serf层事件还是先处理memberList层事件 最终都是变更成left
 	switch member.Status {
 	case StatusAlive:
 		member.Status = StatusLeaving
@@ -1166,7 +1214,8 @@ func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 		// Remove from the failed list and add to the left list. We add
 		// to the left list so that when we do a sync, other nodes will
 		// remove it from their failed list.
-
+		// 从failed列表中删除并添加到left列表。
+		// 我们在left的列表中添加，这样当我们进行同步时，其他节点将从failed的列表中删除它。
 		s.failedMembers = removeOldMember(s.failedMembers, member.Name)
 		s.leftMembers = append(s.leftMembers, member)
 
@@ -1200,6 +1249,7 @@ func (s *Serf) handleNodeLeaveIntent(leaveMsg *messageLeave) bool {
 
 // handlePrune waits for nodes that are leaving and then forcibly
 // erases a member from the list of members
+// handlePrune等待正在离开的节点，然后强制从成员列表中删除一个成员
 func (s *Serf) handlePrune(member *memberState) {
 	if member.Status == StatusLeaving {
 		time.Sleep(s.config.BroadcastTimeout + s.config.LeavePropagateDelay)
@@ -1208,6 +1258,7 @@ func (s *Serf) handlePrune(member *memberState) {
 	s.logger.Printf("[INFO] serf: EventMemberReap (forced): %s %s", member.Name, member.Member.Addr)
 
 	//If we are leaving or left we may be in that list of members
+	// 从left节点中删除
 	if member.Status == StatusLeaving || member.Status == StatusLeft {
 		s.leftMembers = removeOldMember(s.leftMembers, member.Name)
 	}
@@ -1217,8 +1268,11 @@ func (s *Serf) handlePrune(member *memberState) {
 
 // handleNodeJoinIntent is called when a node broadcasts a
 // join message to set the lamport time of its join
+// 当一个节点广播一个join消息来设置它的join的lamport时间时，handleNodeJoinIntent被调用
+// serf层的join处理 如果join的节点还不存在 就暂存在recentIntents中 等memberList的join成功后再处理用户层join
 func (s *Serf) handleNodeJoinIntent(joinMsg *messageJoin) bool {
 	// Witness a potentially newer time
+	// 增加lamportTime
 	s.clock.Witness(joinMsg.LTime)
 
 	s.memberLock.Lock()
@@ -1227,19 +1281,23 @@ func (s *Serf) handleNodeJoinIntent(joinMsg *messageJoin) bool {
 	member, ok := s.members[joinMsg.Node]
 	if !ok {
 		// Rebroadcast only if this was an update we hadn't seen before.
+		// 只有我们之前没见过的更新才会重播。
 		return upsertIntent(s.recentIntents, joinMsg.Node, messageJoinType, joinMsg.LTime, time.Now)
 	}
 
 	// Check if this time is newer than what we have
+	// 过期了
 	if joinMsg.LTime <= member.statusLTime {
 		return false
 	}
 
 	// Update the LTime
+	// 更新LTime
 	member.statusLTime = joinMsg.LTime
 
 	// If we are in the leaving state, we should go back to alive,
 	// since the leaving message must have been for an older time
+	// 如果我们处于离开的状态，我们应该回到活着的状态，因为离开的信息一定是很久以前的了
 	if member.Status == StatusLeaving {
 		member.Status = StatusAlive
 	}
@@ -1574,6 +1632,7 @@ func (s *Serf) resolveNodeConflict() {
 }
 
 //eraseNode takes a node completely out of the member list
+// eraseNode将一个节点完全从成员列表中取出
 func (s *Serf) eraseNode(m *memberState) {
 	// Delete from members
 	delete(s.members, m.Name)
@@ -1599,14 +1658,18 @@ func (s *Serf) eraseNode(m *memberState) {
 
 // handleReap periodically reaps the list of failed and left members, as well
 // as old buffered intents.
+// handleReap定期地获取failed成员和left成员的列表，以及旧的缓冲意图。
 func (s *Serf) handleReap() {
 	for {
 		select {
-		case <-time.After(s.config.ReapInterval):
+		case <-time.After(s.config.ReapInterval): // 定时间隔
 			s.memberLock.Lock()
 			now := time.Now()
+			// ReconnectTimeout个时长没有收到memberList的下线消息 就直接删掉
 			s.failedMembers = s.reap(s.failedMembers, now, s.config.ReconnectTimeout)
+			// TombstoneTimeout保持为left的时间
 			s.leftMembers = s.reap(s.leftMembers, now, s.config.TombstoneTimeout)
+			// 只有serf层的消息 保留的时间
 			reapIntents(s.recentIntents, now, s.config.RecentIntentTimeout)
 			s.memberLock.Unlock()
 		case <-s.shutdownCh:
@@ -1617,6 +1680,7 @@ func (s *Serf) handleReap() {
 
 // handleReconnect attempts to reconnect to recently failed nodes
 // on configured intervals.
+// handleReconnect尝试按照配置的间隔重新连接最近失败的节点。
 func (s *Serf) handleReconnect() {
 	for {
 		select {
@@ -1631,17 +1695,20 @@ func (s *Serf) handleReconnect() {
 // reap is called with a list of old members and a timeout, and removes
 // members that have exceeded the timeout. The members are removed from
 // both the old list and the members itself. Locking is left to the caller.
+// 定时清理left和failed的节点。锁定留给调用者。
 func (s *Serf) reap(old []*memberState, now time.Time, timeout time.Duration) []*memberState {
 	n := len(old)
 	for i := 0; i < n; i++ {
 		m := old[i]
 
+		// 超时时间 以及是否能更新超时时间
 		memberTimeout := timeout
 		if s.config.ReconnectTimeoutOverride != nil {
 			memberTimeout = s.config.ReconnectTimeoutOverride.ReconnectTimeout(&m.Member, memberTimeout)
 		}
 
 		// Skip if the timeout is not yet reached
+		// 没有到达超时时间
 		if now.Sub(m.leaveTime) <= memberTimeout {
 			continue
 		}
@@ -1654,7 +1721,7 @@ func (s *Serf) reap(old []*memberState, now time.Time, timeout time.Duration) []
 
 		// Delete from members and send out event
 		s.logger.Printf("[INFO] serf: EventMemberReap: %s", m.Name)
-		s.eraseNode(m)
+		s.eraseNode(m) // 删除此节点
 
 	}
 
@@ -1662,6 +1729,7 @@ func (s *Serf) reap(old []*memberState, now time.Time, timeout time.Duration) []
 }
 
 // reconnect attempts to reconnect to recently fail nodes.
+// 重新通过memberlist层重新连接最近失败的节点。
 func (s *Serf) reconnect() {
 	s.memberLock.RLock()
 
@@ -1677,6 +1745,8 @@ func (s *Serf) reconnect() {
 	// This means that we probabilistically expect the cluster
 	// to attempt to connect to each failed member once per
 	// reconnect interval
+	// 我们应该尝试重新连接的概率由num failed / (num members - num failed - num left)给出，
+	// 这意味着我们有可能期望集群在每个重新连接间隔内尝试连接每个失败的成员一次
 	numFailed := float32(len(s.failedMembers))
 	numAlive := float32(len(s.members) - len(s.failedMembers) - len(s.leftMembers))
 	if numAlive == 0 {
@@ -1690,6 +1760,7 @@ func (s *Serf) reconnect() {
 	}
 
 	// Select a random member to try and join
+	// 随机选个节点进行join
 	idx := rand.Int31n(int32(n))
 	mem := s.failedMembers[idx]
 	s.memberLock.RUnlock()
@@ -1704,6 +1775,7 @@ func (s *Serf) reconnect() {
 	}
 
 	// Attempt to join at the memberlist level
+	// 通过memberlist层重新进行join
 	s.memberlist.Join([]string{joinAddr})
 }
 
@@ -1729,7 +1801,7 @@ func (s *Serf) checkQueueDepth(name string, queue *memberlist.TransmitLimitedQue
 	for {
 		select {
 		case <-time.After(s.config.QueueCheckInterval):
-			numq := queue.NumQueued()
+			numq := queue.NumQueued() // 消息总数
 			metrics.AddSample([]string{"serf", "queue", name}, float32(numq))
 			if numq >= s.config.QueueDepthWarning {
 				s.logger.Printf("[WARN] serf: %s queue depth: %d", name, numq)
@@ -1747,6 +1819,7 @@ func (s *Serf) checkQueueDepth(name string, queue *memberlist.TransmitLimitedQue
 
 // removeOldMember is used to remove an old member from a list of old
 // members.
+// removeOldMember用于从旧成员列表中删除旧成员。
 func removeOldMember(old []*memberState, name string) []*memberState {
 	for i, m := range old {
 		if m.Name == name {
@@ -1762,6 +1835,7 @@ func removeOldMember(old []*memberState, name string) []*memberState {
 // reapIntents clears out any intents that are older than the timeout. Make sure
 // the memberLock is held when passing in the Serf instance's recentIntents
 // member.
+// reapIntents清除任何超过超时时间的意图。当传递给Serf实例的recentIntents成员时，请确保memberLock被持有。
 func reapIntents(intents map[string]nodeIntent, now time.Time, timeout time.Duration) {
 	for node, intent := range intents {
 		if now.Sub(intent.WallTime) > timeout {
@@ -1775,12 +1849,13 @@ func reapIntents(intents map[string]nodeIntent, now time.Time, timeout time.Dura
 // stamper is used to capture the wall clock time for expiring these buffered
 // intents. Make sure the memberLock is held when passing in the Serf instance's
 // recentIntents member.
+// 更新serf层优先收到的消息 根据lamportTime更新或者添加一个新的
 func upsertIntent(intents map[string]nodeIntent, node string, itype messageType,
 	ltime LamportTime, stamper func() time.Time) bool {
 	if intent, ok := intents[node]; !ok || ltime > intent.LTime {
 		intents[node] = nodeIntent{
 			Type:     itype,
-			WallTime: stamper(),
+			WallTime: stamper(), // 添加进来的当前时间
 			LTime:    ltime,
 		}
 		return true
@@ -1793,6 +1868,8 @@ func upsertIntent(intents map[string]nodeIntent, node string, itype messageType,
 // node, and returns the Lamport time, if an intent is present, indicated by the
 // returned boolean. Make sure the memberLock is held for read when passing in
 // the Serf instance's recentIntents member.
+// recentIntent检查最近的意图缓冲区是否有给定节点的匹配条目，如果有一个意图存在，则返回由返回的布尔值指示的Lamport时间。
+// 当传递给Serf实例的recentIntents成员时，请确保memberLock被保存以供读取。
 func recentIntent(intents map[string]nodeIntent, node string, itype messageType) (LamportTime, bool) {
 	if intent, ok := intents[node]; ok && intent.Type == itype {
 		return intent.LTime, true
@@ -1802,6 +1879,7 @@ func recentIntent(intents map[string]nodeIntent, node string, itype messageType)
 }
 
 // handleRejoin attempts to reconnect to previously known alive nodes
+// handleRejoin尝试重新连接到以前已知的活动节点 基于快照的重启
 func (s *Serf) handleRejoin(previous []*PreviousNode) {
 	for _, prev := range previous {
 		// Do not attempt to join ourself
@@ -1960,6 +2038,7 @@ func (s *Serf) NumNodes() (numNodes int) {
 
 // ValidateNodeNames verifies the NodeName contains
 // only alphanumeric, -, or . and is under 128 chracters
+// ValidateNodeNames验证NodeName只包含字母数字、-和或。长度小于128个字符
 func (s *Serf) ValidateNodeNames() error {
 	return s.validateNodeName(s.config.NodeName)
 }
