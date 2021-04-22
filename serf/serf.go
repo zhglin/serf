@@ -87,13 +87,15 @@ type Serf struct {
 	// serf层对节点的上下线要晚于memberlist层的上下线，recentIntents是用来缓存serf层的node上下线记录的
 	recentIntents map[string]nodeIntent
 
+	// user信息专用
 	eventBroadcasts *memberlist.TransmitLimitedQueue
-	eventBuffer     []*userEvents
+	eventBuffer     []*userEvents //历史消息
 	eventJoinIgnore atomic.Value
 	eventMinTime    LamportTime
 	eventLock       sync.RWMutex
 
 	// 需要进行广播的队列 传递到memberList层
+	// query消息专用
 	queryBroadcasts *memberlist.TransmitLimitedQueue
 	// 历史query消息 用来判定是否过期消息
 	queryBuffer []*queries
@@ -298,6 +300,9 @@ func Create(conf *Config) (*Serf, error) {
 		return nil, err
 	}
 
+	// 初始的conf.EventCh是agent创建的
+	// 通过conf.EventCh来形成一个chain链式处理
+	// memberEventCoalescer,userEventCoalescer都不关心的事件 会返回到agent的chain
 	// Check if serf member event coalescing is enabled
 	if conf.CoalescePeriod > 0 && conf.QuiescentPeriod > 0 && conf.EventCh != nil {
 		c := &memberEventCoalescer{
@@ -305,16 +310,19 @@ func Create(conf *Config) (*Serf, error) {
 			latestEvents: make(map[string]coalesceEvent),
 		}
 
+		// out chain => conf.EventCh agent创建的
 		conf.EventCh = coalescedEventCh(conf.EventCh, serf.shutdownCh,
 			conf.CoalescePeriod, conf.QuiescentPeriod, c)
 	}
 
 	// Check if user event coalescing is enabled
+	// 用户消息
 	if conf.UserCoalescePeriod > 0 && conf.UserQuiescentPeriod > 0 && conf.EventCh != nil {
 		c := &userEventCoalescer{
 			events: make(map[string]*latestUserEvents),
 		}
 
+		// out chain => coalescedEventCh的in chain
 		conf.EventCh = coalescedEventCh(conf.EventCh, serf.shutdownCh,
 			conf.UserCoalescePeriod, conf.UserQuiescentPeriod, c)
 	}
@@ -322,6 +330,8 @@ func Create(conf *Config) (*Serf, error) {
 	// Listen for internal Serf queries. This is setup before the snapshotter, since
 	// we want to capture the query-time, but the internal listener does not passthrough
 	// the queries
+	// 监听内部Serf查询。这是在快照之前设置的，因为我们想捕获查询时间，但内部侦听器不通过查询 handleQuery
+	// out chain => coalescedEventCh的 in chain
 	outCh, err := newSerfQueries(serf, serf.logger, conf.EventCh, serf.shutdownCh)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to setup serf query handler: %v", err)
@@ -473,10 +483,14 @@ func (s *Serf) KeyManager() *KeyManager {
 // name and payload. If the configured size limit is exceeded and error will be returned.
 // If coalesce is enabled, nodes are allowed to coalesce this event.
 // Coalescing is only available starting in v0.2
+// UserEvent用于广播具有给定名称和有效负载的自定义用户事件。
+// 如果超过配置的大小限制，则返回错误。
+// 如果启用了合并，则允许节点合并此事件。合并仅从v0.2开始可用
 func (s *Serf) UserEvent(name string, payload []byte, coalesce bool) error {
 	payloadSizeBeforeEncoding := len(name) + len(payload)
 
 	// Check size before encoding to prevent needless encoding and return early if it's over the specified limit.
+	// 长度限制
 	if payloadSizeBeforeEncoding > s.config.UserEventSizeLimit {
 		return fmt.Errorf(
 			"user event exceeds configured limit of %d bytes before encoding",
@@ -507,6 +521,7 @@ func (s *Serf) UserEvent(name string, payload []byte, coalesce bool) error {
 
 	// Check the size after encoding to be sure again that
 	// we're not attempting to send over the specified size limit.
+	// 在编码后检查大小，以再次确保我们没有试图发送超过指定的大小限制。
 	if len(raw) > s.config.UserEventSizeLimit {
 		return fmt.Errorf(
 			"encoded user event exceeds configured limit of %d bytes after encoding",
@@ -521,9 +536,11 @@ func (s *Serf) UserEvent(name string, payload []byte, coalesce bool) error {
 		)
 	}
 
+	// 发送前+1
 	s.eventClock.Increment()
 
 	// Process update locally
+	// 自己本地处理msg
 	s.handleUserEvent(&msg)
 
 	s.eventBroadcasts.QueueBroadcast(&broadcast{

@@ -21,7 +21,7 @@ func (l *LamportClock) Time() LamportTime {
 }
 
 // Increment is used to increment and return the value of the lamport clock
-// 本地lamport时钟+1
+// 本地lamport时钟+1 发送前+1
 func (l *LamportClock) Increment() LamportTime {
 	return LamportTime(atomic.AddUint64(&l.counter, 1))
 }

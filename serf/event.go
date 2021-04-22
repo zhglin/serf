@@ -54,8 +54,9 @@ type Event interface {
 
 // MemberEvent is the struct used for member related events
 // Because Serf coalesces events, an event may contain multiple members.
+// MemberEvent是用于成员相关事件的结构体，因为Serf合并事件，一个事件可能包含多个成员。
 type MemberEvent struct {
-	Type    EventType
+	Type    EventType // 事件类型  供上游系统选择自己关心的事件处理
 	Members []Member
 }
 

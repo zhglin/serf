@@ -98,11 +98,12 @@ func (s *serfQueries) stream() {
 		select {
 		case e := <-s.inCh:
 			// Check if this is a query we should process
+			// query类型的消息 直接处理
 			if q, ok := e.(*Query); ok && strings.HasPrefix(q.Name, InternalQueryPrefix) {
 				go s.handleQuery(q)
 
 			} else if s.outCh != nil {
-				s.outCh <- e
+				s.outCh <- e // 非query的消息
 			}
 
 		case <-s.shutdownCh:
@@ -136,7 +137,7 @@ func (s *serfQueries) handleQuery(q *Query) {
 // handleConflict is invoked when we get a query that is attempting to
 // disambiguate a name conflict. They payload is a node name, and the response
 // should the address we believe that node is at, if any.
-// 当我们得到一个试图消除名称冲突歧义的查询时，将调用handlecconflict。
+// 当我们得到一个试图消除名称冲突歧义的查询时，将调用handleConflict
 // 它们的有效负载是一个节点名，响应应该是我们认为节点所在的地址(如果有的话)。
 func (s *serfQueries) handleConflict(q *Query) {
 	// The target node name is the payload
@@ -238,6 +239,9 @@ func (s *serfQueries) sendKeyResponse(q *Query, resp *nodeKeyResponse) {
 // the memberlist keyring. This type of query may fail if the provided key does
 // not fit the constraints that memberlist enforces. If the query fails, the
 // response will contain the error message so that it may be relayed.
+// 每当从集群中的另一个成员接收到新的加密密钥时，都会调用handleInstallKey，并处理将其安装到memberlist密匙环的过程。
+// 如果提供的键不符合memberlist强制的约束，这种类型的查询可能会失败。
+// 如果查询失败，响应将包含错误消息，以便进行转发。
 func (s *serfQueries) handleInstallKey(q *Query) {
 	response := nodeKeyResponse{Result: false}
 	keyring := s.serf.config.MemberlistConfig.Keyring

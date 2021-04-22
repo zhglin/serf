@@ -298,6 +298,8 @@ type Config struct {
 
 	// UserEventSizeLimit is maximum byte size limit of user event `name` + `payload` in bytes.
 	// It's optimal to be relatively small, since it's going to be gossiped through the cluster.
+	// UserEventSizeLimit是用户事件“名称”+“有效负载”的最大字节大小限制，以字节为单位。
+	// 最好是相对较小，因为它会在集群中传播。
 	UserEventSizeLimit int
 
 	// messageDropper is a callback used for selectively ignoring inbound

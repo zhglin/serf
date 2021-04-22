@@ -137,6 +137,7 @@ func (d *delegate) NotifyMsg(buf []byte) {
 	}
 }
 
+// memberList层的调用 获取serf层的消息跟随memberList消息一起进行广播
 func (d *delegate) GetBroadcasts(overhead, limit int) [][]byte {
 	msgs := d.serf.broadcasts.GetBroadcasts(overhead, limit)
 

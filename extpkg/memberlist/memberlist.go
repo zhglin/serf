@@ -575,7 +575,7 @@ func (m *Memberlist) SendTo(to net.Addr, msg []byte) error {
 func (m *Memberlist) SendToAddress(a Address, msg []byte) error {
 	// Encode as a user message
 	buf := make([]byte, 1, len(msg)+1)
-	buf[0] = byte(userMsg)
+	buf[0] = byte(userMsg) //   增加user标识
 	buf = append(buf, msg...)
 
 	// Send the message
